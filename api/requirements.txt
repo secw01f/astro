@@ -1,0 +1,15 @@
+fastapi
+sqlmodel
+typer
+uvicorn
+pydantic-settings
+haystack-ai
+amazon-bedrock-haystack
+anthropic-haystack
+mcp-haystack
+fastembed
+pyjwt
+pwdlib[argon2]
+asyncpg
+pgvector[all]
+httpx

@@ -1,0 +1,31 @@
+[project]
+name = "astro"
+version = "0.1.0"
+description = "The astro client to interact with the astro agentic backend from the cli."
+authors = [
+    {name = "secw01f",email = "secw01f@proton.me"}
+]
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "click (>=8.3.1,<9.0.0)",
+    "httpx (>=0.28.1,<0.29.0)",
+    "InquirerPy (>=0.3.4,<0.4.0)"
+]
+
+[tool.poetry]
+packages = [
+    { include = "src" },
+    { include = "lib" }
+]
+
+[tool.poetry.group.dev.dependencies]
+click = "^8.3.1"
+httpx = "^0.29.0"
+
+[project.scripts]
+astro = "src.astro:astro"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
