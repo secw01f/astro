@@ -7,7 +7,9 @@ from src.logging.config import log_config
 from settings import settings
 from lib.auth.auth import create_user, generate_password
 from src.db.db import init_db, async_session
-from src.db.models import User, ToolSet, Tool
+from src.db.models import User, ToolSet, Tool, Prompt
+from lib.agent.prompts import APPLICATION_SECURITY_SUPERVISOR_PROMPT, GOVERNANCE_RISK_COMPLIANCE_SUPERVISOR_PROMPT, DETECTION_INCIDENT_RESPONSE_SUPERVISOR_PROMPT, OFFENSIVE_SECURITY_SUPERVISOR_PROMPT, VULNERABILITY_MANAGEMENT_SUPERVISOR_PROMPT, APPLICATION_SECURITY_ARCHITECT_PROMPT, DETECTION_INCIDENT_RESPONSE_ARCHITECT_PROMPT, SECURITY_ENGINEERING_ARCHITECT_PROMPT, APPLICATION_SECURITY_ENGINEER_PROMPT, GOVERNANCE_RISK_COMPLIANCE_ENGINEER_PROMPT, DETECTION_INCIDENT_RESPONSE_ENGINEER_PROMPT, OFFENSIVE_SECURITY_ENGINEER_PROMPT, VULNERABILITY_MANAGEMENT_ENGINEER_PROMPT, APPLICATION_SECURITY_ANALYST_PROMPT, GOVERNANCE_RISK_COMPLIANCE_ANALYST_PROMPT, DETECTION_INCIDENT_RESPONSE_ANALYST_PROMPT, OFFENSIVE_SECURITY_ANALYST_PROMPT, VULNERABILITY_MANAGEMENT_ANALYST_PROMPT
+from lib.agent.enums import AgentRole, AgentType
 from lib.tool.http import get_tools
 from lib.tool.models import ToolsResponse
 from lib.tool.enums import ToolType
@@ -27,9 +29,9 @@ logger = logging.getLogger(__name__)
 async def startup_event():
     logger.info("API startup initiated")
 
-    logger.info("Initializing Database")
+    logger.info("Initializing the database")
     await init_db()
-    logger.info("Database Initialized")
+    logger.info("Database initialized")
     
     async with async_session() as session:
         user = select(User).where(User.username == "stack")
@@ -37,13 +39,42 @@ async def startup_event():
         existing_user = result.first()
         
         if not existing_user:
-            logger.info("Creating Default \"stack\" User")
+            logger.info("Creating default \"stack\" User")
             password = generate_password(16)
             await create_user(session, "stack", "stack@stack.local", password)
             logger.info(f"Username: stack")
             logger.info(f"Password: {password}")
         else:
             logger.info(f"Default user already exists")
+
+    logger.info("Populating prebuilt prompts")
+    async with async_session() as session:
+        _prompts_statement = select(Prompt)
+        _prompts = (await session.exec(_prompts_statement)).all()
+        if not _prompts:
+            logger.info("Creating default prompts")
+            _prompts = [Prompt(role=AgentRole.APPLICATION_SECURITY_SUPERVISOR, agent_type=AgentType.SUPERVISOR, prompt=APPLICATION_SECURITY_SUPERVISOR_PROMPT),
+                        Prompt(role=AgentRole.GOVERNANCE_RISK_COMPLIANCE_SUPERVISOR, agent_type=AgentType.SUPERVISOR, prompt=GOVERNANCE_RISK_COMPLIANCE_SUPERVISOR_PROMPT),
+                        Prompt(role=AgentRole.DETECTION_INCIDENT_RESPONSE_SUPERVISOR, agent_type=AgentType.SUPERVISOR, prompt=DETECTION_INCIDENT_RESPONSE_SUPERVISOR_PROMPT),
+                        Prompt(role=AgentRole.OFFENSIVE_SECURITY_SUPERVISOR, agent_type=AgentType.SUPERVISOR, prompt=OFFENSIVE_SECURITY_SUPERVISOR_PROMPT),
+                        Prompt(role=AgentRole.VULNERABILITY_MANAGEMENT_SUPERVISOR, agent_type=AgentType.SUPERVISOR, prompt=VULNERABILITY_MANAGEMENT_SUPERVISOR_PROMPT),
+                        Prompt(role=AgentRole.APPLICATION_SECURITY_ARCHITECT, agent_type=AgentType.SUPPORTING, prompt=APPLICATION_SECURITY_ARCHITECT_PROMPT),
+                        Prompt(role=AgentRole.DETECTION_INCIDENT_RESPONSE_ARCHITECT, agent_type=AgentType.SUPPORTING, prompt=DETECTION_INCIDENT_RESPONSE_ARCHITECT_PROMPT),
+                        Prompt(role=AgentRole.SECURITY_ENGINEERING_ARCHITECT, agent_type=AgentType.SUPPORTING, prompt=SECURITY_ENGINEERING_ARCHITECT_PROMPT),
+                        Prompt(role=AgentRole.APPLICATION_SECURITY_ENGINEER, agent_type=AgentType.SUPPORTING, prompt=APPLICATION_SECURITY_ENGINEER_PROMPT),
+                        Prompt(role=AgentRole.GOVERNANCE_RISK_COMPLIANCE_ENGINEER, agent_type=AgentType.SUPPORTING, prompt=GOVERNANCE_RISK_COMPLIANCE_ENGINEER_PROMPT),
+                        Prompt(role=AgentRole.DETECTION_INCIDENT_RESPONSE_ENGINEER, agent_type=AgentType.SUPPORTING, prompt=DETECTION_INCIDENT_RESPONSE_ENGINEER_PROMPT),
+                        Prompt(role=AgentRole.OFFENSIVE_SECURITY_ENGINEER, agent_type=AgentType.SUPPORTING, prompt=OFFENSIVE_SECURITY_ENGINEER_PROMPT),
+                        Prompt(role=AgentRole.VULNERABILITY_MANAGEMENT_ENGINEER, agent_type=AgentType.SUPPORTING, prompt=VULNERABILITY_MANAGEMENT_ENGINEER_PROMPT),
+                        Prompt(role=AgentRole.APPLICATION_SECURITY_ANALYST, agent_type=AgentType.SUPPORTING, prompt=APPLICATION_SECURITY_ANALYST_PROMPT),
+                        Prompt(role=AgentRole.GOVERNANCE_RISK_COMPLIANCE_ANALYST, agent_type=AgentType.SUPPORTING, prompt=GOVERNANCE_RISK_COMPLIANCE_ANALYST_PROMPT),
+                        Prompt(role=AgentRole.DETECTION_INCIDENT_RESPONSE_ANALYST, agent_type=AgentType.SUPPORTING, prompt=DETECTION_INCIDENT_RESPONSE_ANALYST_PROMPT),
+                        Prompt(role=AgentRole.OFFENSIVE_SECURITY_ANALYST, agent_type=AgentType.SUPPORTING, prompt=OFFENSIVE_SECURITY_ANALYST_PROMPT),
+                        Prompt(role=AgentRole.VULNERABILITY_MANAGEMENT_ANALYST, agent_type=AgentType.SUPPORTING, prompt=VULNERABILITY_MANAGEMENT_ANALYST_PROMPT)]
+            session.add_all(_prompts)
+            await session.commit()
+
+    logger.info("Prebuilt prompts populated")
 
     logger.info("Initializing default toolsets")
     async with async_session() as session:

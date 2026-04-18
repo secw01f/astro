@@ -4,11 +4,23 @@ from typing import Any, List, Optional
 
 from pydantic import BaseModel, model_validator
 from pgvector.sqlalchemy import Vector
+from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import JSONB
 
 from lib.llm.enums import Provider
 from lib.agent.enums import AgentRole, AgentType
 from lib.tool.enums import ToolType
+
+_AGENT_ROLE_PG = SAEnum(
+    AgentRole,
+    name="agentrole",
+    values_callable=lambda cls: [m.value for m in cls],
+)
+_AGENT_TYPE_PG = SAEnum(
+    AgentType,
+    name="agenttype",
+    values_callable=lambda cls: [m.value for m in cls],
+)
 
 # User Models
 class UserBase(SQLModel):
@@ -75,6 +87,16 @@ class Memory(MemoryBase, table=True):
         ),
     )
 
+# Prompt Models
+class PromptBase(SQLModel):
+    prompt: str
+
+class Prompt(PromptBase, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    role: AgentRole = Field(sa_column=Column(_AGENT_ROLE_PG, unique=True))
+    agent_type: AgentType = Field(sa_column=Column(_AGENT_TYPE_PG))
+    created: datetime = Field(default_factory=datetime.utcnow)
+
 # Agent Models
 class AgentBase(SQLModel):
     name: str
@@ -94,6 +116,8 @@ class AgentToolSetLink(SQLModel, table=True):
 
 class Agent(AgentBase, table=True):
     id: int | None = Field(default=None, primary_key=True)
+    agent_type: AgentType = Field(sa_column=Column(_AGENT_TYPE_PG))
+    role: AgentRole = Field(sa_column=Column(_AGENT_ROLE_PG))
     user_id: Optional[int] | None = Field(default=None, foreign_key="user.id")
     user: Optional["User"] = Relationship(back_populates="agents")
     stacks: List["Stack"] = Relationship(back_populates="agents", link_model=AgentStackLink)

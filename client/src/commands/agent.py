@@ -164,8 +164,11 @@ def create(ctx: click.Context, name: str | None, description: str | None, agent_
     click.echo("")
     click.echo(white("Step 4/5 - Prompt and toolsets", "normal"))
     click.echo("")
-    if not system_prompt:
+    
+    if not system_prompt and role in ("custom_supervisor", "custom_supporting_agent"):
         system_prompt = click.prompt("System prompt", type=str)
+    else:
+        system_prompt = None
     click.echo("")
 
     selected_toolset_ids = [*toolset_ids]
