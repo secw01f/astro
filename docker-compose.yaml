@@ -1,0 +1,55 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      tools:
+        condition: service_started
+  #    redis:
+  #      condition: service_started
+    entrypoint: ["/bin/bash", "entrypoint.sh"]
+    volumes:
+      - specs:/api/specs
+      - logs:/var/log/astro
+
+  tools:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: tools
+    ports:
+      - "7001:7001"
+    entrypoint: ["/bin/bash", "entrypoint.sh"]
+
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+#  redis:
+#    image: redis:7
+#    healthcheck:
+#      test: ["CMD", "redis-cli", "ping"]
+#      interval: 5s
+#      timeout: 3s
+#      retries: 5
+
+volumes:
+  dbdata:
+  specs:
+  logs:
