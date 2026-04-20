@@ -127,6 +127,104 @@ async def startup_event():
         else:
             logger.info("Default Web toolset tools already up to date")
 
+        _recon_toolset_statement = select(ToolSet).where(
+            ToolSet.name == "Recon",
+            ToolSet.url == f"{settings.DEFAULT_TOOLS_BASE_URL}/recon",
+            ToolSet.type == ToolType.HTTP,
+        )
+        recon_toolset = (await session.exec(_recon_toolset_statement)).first()
+
+        if recon_toolset is None:
+            logger.info("Creating default Recon toolset")
+            recon_toolset = ToolSet(
+                name="Recon",
+                description="A toolset for reconnaissance",
+                url=f"{settings.DEFAULT_TOOLS_BASE_URL}/recon",
+                type=ToolType.HTTP,
+            )
+            session.add(recon_toolset)
+            await session.commit()
+            await session.refresh(recon_toolset)
+        else:
+            logger.info("Default Recon toolset already exists")
+
+        _tools = await get_tools(recon_toolset.url)
+        _parsed_tools = ToolsResponse.model_validate(_tools)
+        _existing_tools_statement = select(Tool).where(Tool.toolset_id == recon_toolset.id)
+        _existing_tools = (await session.exec(_existing_tools_statement)).all()
+        _existing_tool_names = {tool.name for tool in _existing_tools}
+        created_count = 0
+
+        for tool in _parsed_tools.tools:
+            if tool.name in _existing_tool_names:
+                continue
+            session.add(
+                Tool(
+                    name=tool.name,
+                    description=tool.description,
+                    input=tool.input_schema,
+                    toolset_id=recon_toolset.id,
+                    type=ToolType.HTTP,
+                    url=recon_toolset.url,
+                )
+            )
+            created_count += 1
+
+        if created_count > 0:
+            await session.commit()
+            logger.info("Added %s new tool(s) to default Recon toolset", created_count)
+        else:
+            logger.info("Default Recon toolset tools already up to date")
+
+    _reporting_toolset_statement = select(ToolSet).where(
+        ToolSet.name == "Reporting",
+        ToolSet.url == f"{settings.DEFAULT_TOOLS_BASE_URL}/reporting",
+        ToolSet.type == ToolType.HTTP,
+    )
+    reporting_toolset = (await session.exec(_reporting_toolset_statement)).first()
+
+    if reporting_toolset is None:
+        logger.info("Creating default Reporting toolset")
+        reporting_toolset = ToolSet(
+            name="Reporting",
+            description="A toolset for reporting",
+            url=f"{settings.DEFAULT_TOOLS_BASE_URL}/reporting",
+            type=ToolType.HTTP,
+        )
+        session.add(reporting_toolset)
+        await session.commit()
+        await session.refresh(reporting_toolset)
+    else:
+        logger.info("Default Reporting toolset already exists")
+
+    _tools = await get_tools(reporting_toolset.url)
+    _parsed_tools = ToolsResponse.model_validate(_tools)
+    _existing_tools_statement = select(Tool).where(Tool.toolset_id == reporting_toolset.id)
+    _existing_tools = (await session.exec(_existing_tools_statement)).all()
+    _existing_tool_names = {tool.name for tool in _existing_tools}
+    created_count = 0
+
+    for tool in _parsed_tools.tools:
+        if tool.name in _existing_tool_names:
+            continue
+        session.add(
+            Tool(
+                name=tool.name,
+                description=tool.description,
+                input=tool.input_schema,
+                toolset_id=reporting_toolset.id,
+                type=ToolType.HTTP,
+                url=reporting_toolset.url,
+            )
+        )
+        created_count += 1
+
+    if created_count > 0:
+        await session.commit()
+        logger.info("Added %s new tool(s) to default Reporting toolset", created_count)
+    else:
+        logger.info("Default Reporting toolset tools already up to date")
+
     logger.info("Default toolsets ready")
 
     logger.info("Startup Complete")
