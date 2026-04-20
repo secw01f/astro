@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 from dataclasses import dataclass
-from typing import Callable, Type, List, Any, Optional, Dict
+from typing import Any, Callable, Dict, List, Type
 
 @dataclass
 class ToolDef:
@@ -13,21 +13,11 @@ class ToolDef:
     capabilities: list[str] = None
     version: str = "0.1"
 
-class ToolInputSchemaProperty(BaseModel):
-    title: Optional[str] = None
-    type: str
-    default: Optional[Any] = None
-
-class ToolInputSchema(BaseModel):
-    properties: Dict[str, ToolInputSchemaProperty]
-    required: List[str] = []
-    title: Optional[str] = None
-    type: str = "object"
 
 class Tool(BaseModel):
     name: str
     description: str
-    input_schema: ToolInputSchema
+    input_schema: dict[str, Any]
 
 class ToolsResponse(BaseModel):
     tools: List[Tool]
