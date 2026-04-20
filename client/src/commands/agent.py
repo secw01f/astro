@@ -225,6 +225,7 @@ def create(ctx: click.Context, name: str | None, description: str | None, agent_
 @click.option("--name", type=click.STRING, required=False, help="Name of the agent")
 @click.option("--description", type=click.STRING, required=False, help="Description of the agent")
 @click.option("--role", type=click.STRING, required=False, help="Role of the agent")
+@click.option("--system-prompt", type=click.STRING, required=False, help="System prompt for the agent")
 @click.option("--llm-id", type=click.INT, required=False, help="LLM ID to use")
 @click.option("--toolset-id", "toolset_ids", type=click.INT, multiple=True, help="Toolset ID to attach (repeatable)")
 @click.option("--interactive/--no-interactive", default=True, help="Use interactive selection prompts")
@@ -260,19 +261,20 @@ def update_agent(ctx: click.Context, id: int, name: str | None, description: str
     click.echo(white("Step 2/5 - System prompt", "normal"))
     click.echo("")
     current_prompt = current_agent.get("system_prompt", "")
-    keep_existing_prompt = select_one(
-        "Use the prompt already set on this agent?",
-        [
-            ("yes", f"Yes - {_truncate_prompt(current_prompt) if current_prompt else '(empty prompt)'}"),
-            ("no", "No - write a new prompt"),
-        ],
-        interactive=interactive,
-    )
+    if system_prompt is None:
+        keep_existing_prompt = select_one(
+            "Use the prompt already set on this agent?",
+            [
+                ("yes", f"Yes - {_truncate_prompt(current_prompt) if current_prompt else '(empty prompt)'}"),
+                ("no", "No - write a new prompt"),
+            ],
+            interactive=interactive,
+        )
 
-    if keep_existing_prompt == "yes" and current_prompt:
-        system_prompt = current_prompt
-    else:
-        system_prompt = click.prompt("System prompt", type=str, default=current_prompt, show_default=False)
+        if keep_existing_prompt == "yes" and current_prompt:
+            system_prompt = current_prompt
+        else:
+            system_prompt = click.prompt("System prompt", type=str, default=current_prompt, show_default=False)
     click.echo("")
 
     click.echo("")

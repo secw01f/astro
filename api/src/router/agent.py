@@ -71,7 +71,11 @@ async def update_agent(request: Request, id: int, body: UpdateAgent, session: se
 
     user_id = claims["id"]
 
-    statement = select(Agent).where(Agent.user_id == user_id, Agent.id == id)
+    statement = (
+        select(Agent)
+        .where(Agent.user_id == user_id, Agent.id == id)
+        .options(selectinload(Agent.toolsets))
+    )
     result = await session.exec(statement)
     agent = result.first()
 
