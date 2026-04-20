@@ -1,5 +1,6 @@
 import importlib
 import pkgutil
+from typing import get_type_hints
 
 from lib.models import ToolDef
 
@@ -9,7 +10,8 @@ def create_tool_registry(namespace: str):
 
     def tool(name: str, description: str, capabilities: list[str] | None = None, version: str = "0.1"):
         def tool_wrapper(func):
-            _input = func.__annotations__.get("input")
+            hints = get_type_hints(func, globalns=func.__globals__, localns=None)
+            _input = hints.get("input")
             
             registry[name] = ToolDef(
                 name = name,

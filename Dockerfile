@@ -9,3 +9,6 @@ COPY tools/ /tools
 COPY .env /tools
 WORKDIR /tools
 RUN pip install --no-cache-dir -r requirements.txt
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends nmap \
+    && rm -rf /var/lib/apt/lists/*
