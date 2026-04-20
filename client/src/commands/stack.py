@@ -199,7 +199,7 @@ def execute_stack(ctx: click.Context, id: int):
 
     while True:
         try:
-            input = click.prompt(cyan("You: ", "bold"))
+            input = click.prompt(magenta("You", "bold"))
         except (click.Abort, EOFError, KeyboardInterrupt):
             break
         
@@ -224,9 +224,9 @@ def execute_stack(ctx: click.Context, id: int):
                 messages = response.json()["messages"]
                 for message in messages:
                     if message["role"] == "assistant":
-                        click.echo(f"{cyan(f"{message['role'].capitalize()}:", "bold")} {white(f"{message['content']}", "normal")}")
+                        click.echo(f"{cyan(f"{message['role'].capitalize()}", "bold")} {white(f"{message['content']}", "normal")}")
                     elif message["role"] == "user":
-                        click.echo(f"{magenta("You:", "bold")} {white(f"{message['content']}", "normal")}")
+                        click.echo(f"{magenta("You", "bold")} {white(f"{message['content']}", "normal")}")
                     click.echo("")
             elif cmd == "/help" or cmd == "/h":
                 for command, description in _chat_commands.items():

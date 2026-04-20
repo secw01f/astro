@@ -5,10 +5,11 @@ from sqlalchemy.orm import selectinload
 from sqlmodel import select
 
 from src.db.db import session_dep
-from src.db.models import Agent, AgentPublic, ToolSet
+from src.db.models import Agent, AgentPublic, ToolSet, Prompt
 from lib.auth.auth import verify_token
 
-from lib.agent.models import CreateAgent, UpdateAgent
+from lib.agent.enums import AgentRole
+from lib.agent.models import CreateAgent, UpdateAgent, UpdatePrompt
 
 agent_router = APIRouter(prefix="/agent", dependencies=[Depends(verify_token)])
 logger = logging.getLogger(__name__)
@@ -127,10 +128,21 @@ async def create_agent(request: Request, agent: CreateAgent, session: session_de
 
     user_id = claims["id"]
 
+    system_prompt = agent.system_prompt
+    if system_prompt is None and agent.role not in (
+        AgentRole.CUSTOM_SUPERVISOR,
+        AgentRole.CUSTOM_SUPPORTING_AGENT,
+    ):
+        stmt = select(Prompt).where(Prompt.role == agent.role)
+        result = await session.exec(stmt)
+        prebuilt = result.first()
+        if prebuilt:
+            system_prompt = prebuilt.prompt
+
     new_agent = Agent(
         name=agent.name,
         description=agent.description,
-        system_prompt=agent.system_prompt,
+        system_prompt=system_prompt or "",
         llm_id=agent.llm,
         agent_type=agent.type,
         role=agent.role,
@@ -187,3 +199,23 @@ async def delete_agent(request: Request, id: int, session: session_dep) -> dict[
     await session.commit()
 
     return {"message": "Agent deleted successfully"}
+
+@agent_router.get("/prompts")
+async def get_prebuilt_prompts(session: session_dep) -> dict[str, list[str]]:
+    stmt = select(Prompt)
+    result = await session.exec(stmt)
+    prompts = result.all()
+    return {"prompts": [Prompt.model_validate(prompt) for prompt in prompts]}
+
+@agent_router.patch("/prompt/{id}")
+async def update_prebuilt_prompt(prompt: UpdatePrompt, session: session_dep) -> dict[str, Prompt]:
+    stmt = select(Prompt).where(Prompt.id == id)
+    result = await session.exec(stmt)
+    prompt = result.first()
+    if not prompt:
+        raise HTTPException(status_code=404, detail="Prompt not found")
+    prompt.prompt = prompt.prompt
+    session.add(prompt)
+    await session.flush()
+    await session.commit()
+    return {"prompt": Prompt.model_validate(prompt)}

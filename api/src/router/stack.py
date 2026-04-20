@@ -17,6 +17,7 @@ from lib.agent import SupervisorAgent, SupportingAgent, StreamingCallback
 from lib.message import event_stream, fanout, storage_consumer, next_position
 from lib.stack.models import CreateStack, ExecuteStack, UpdateStack
 from lib.agent.enums import AgentType
+from lib.agent.prompts import create_prompt
 from lib.llm import chat_generator, decrypt_llm_api_key
 from lib.tool.enums import ToolType
 from lib.tool.mcp import MCP
@@ -25,6 +26,7 @@ from src.tool.memory import MemoryToolset
 from src.tool.date import DateToolset
 from src.tool.math import MathToolset
 from src.tool.spec import SpecToolset
+from src.tool.message import MessageToolset
 
 stack_router = APIRouter(prefix="/stack", dependencies=[Depends(verify_token)])
 logger = logging.getLogger(__name__)
@@ -244,23 +246,25 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
     client_queue = asyncio.Queue()
     storage_queue = asyncio.Queue()
 
+    _app_loop = asyncio.get_running_loop()
     _callback = StreamingCallback(
         _stack_supervisor.name,
         main_queue,
         run_id,
-        loop=asyncio.get_running_loop(),
+        loop=_app_loop,
     )
 
     supervisor = SupervisorAgent(
         chat_generator=supervisor_llm,
-        system_prompt=_stack_supervisor.system_prompt,
+        system_prompt=create_prompt(_stack_supervisor.system_prompt),
         streaming_callback=_callback
     )
 
-    supervisor.add_tool(MemoryToolset())
+    supervisor.add_tool(MemoryToolset(user_id, app_loop=_app_loop))
     supervisor.add_tool(DateToolset())
     supervisor.add_tool(MathToolset())
     supervisor.add_tool(SpecToolset())
+    supervisor.add_tool(MessageToolset(id, app_loop=_app_loop))
 
     _stack_agents = [agent for agent in _stack.agents if agent.agent_type == AgentType.SUPPORTING]
 
@@ -273,7 +277,7 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
         
         _agent_llm = chat_generator(_llm.provider, _llm.model, decrypt_llm_api_key(_llm.key), _llm.key_id, _llm.region, _llm.max_tokens)
 
-        _agent_tools = [MemoryToolset(), DateToolset(), MathToolset(), SpecToolset()]
+        _agent_tools = [MemoryToolset(user_id, app_loop=_app_loop), DateToolset(), MathToolset(), SpecToolset()]
 
         for toolset in agent.toolsets:
             if toolset.type == ToolType.MCP:
@@ -293,7 +297,7 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
             chat_generator=_agent_llm,
             name=agent.name,
             description=agent.description,
-            system_prompt=agent.system_prompt,
+            system_prompt=create_prompt(agent.system_prompt),
             user_prompt="""{% message role="user" %}{{prompt}}{% endmessage %}""",
             required_variables=["prompt"],
             tools=_agent_tools,
@@ -328,7 +332,11 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
         fanout_task = asyncio.create_task(fanout_worker())
         storage_task = asyncio.create_task(storage_worker())
 
-        result = await supervisor.run(messages=execute.message)
+        # supervisor.run() is synchronous and CPU/IO-heavy; running it on the main
+        # asyncio thread would block the event loop so fanout/event_stream could not
+        # deliver SSE chunks until completion. Run it in a worker thread instead.
+        messages_for_run = [ChatMessage.from_user(execute.message)]
+        result = await asyncio.to_thread(supervisor.run, messages=messages_for_run)
 
         await asyncio.sleep(0)
 

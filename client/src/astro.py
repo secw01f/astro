@@ -6,6 +6,7 @@ import json
 import os
 
 from lib.color import red, white
+from lib.banner import banner
 
 from src.commands.config import config
 from src.commands.auth import auth
@@ -15,7 +16,11 @@ from src.commands.llm import llms
 from src.commands.docs import docs
 from src.commands.stack import stacks
 
-@click.group()
+class BannerGroup(click.Group):
+    def get_help(self, ctx: click.Context) -> str:
+        return f"{banner()}\n\n{super().get_help(ctx)}"
+
+@click.group(cls=BannerGroup)
 @click.pass_context
 def astro(ctx: click.Context):
     _home = pathlib.Path.home()
@@ -53,7 +58,7 @@ def astro(ctx: click.Context):
         })
         ctx.obj["async_client"].headers.update({
             "X-API-KEY": _config["token"]
-        }) 
+        })
 
 @astro.result_callback()
 @click.pass_context
