@@ -20,7 +20,7 @@ from lib.agent.enums import AgentType
 from lib.agent.prompts import create_prompt
 from lib.llm import chat_generator, decrypt_llm_api_key
 from lib.tool.enums import ToolType
-from lib.tool.mcp import MCP
+from lib.tool.mcp import MCP, is_valid_server
 from lib.tool.http import http_toolset_factory
 from src.tool.memory import MemoryToolset
 from src.tool.date import DateToolset
@@ -286,9 +286,26 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
                     for tool in toolset.tools:
                         tools.append(tool.name)
                 if len(tools) != 0:
-                    _agent_tools.append(MCP(toolset.url, tools))
+                    try:
+                        if is_valid_server(toolset.url):
+                            _agent_tools.append(MCP(toolset.url, tools))
+                        else:
+                            logger.error(f"Invalid MCP server: {toolset.url}")
+                            pass
+                    except Exception as e:
+                        logger.error(f"Error adding MCP toolset {toolset.url}: {e}")
+                        pass
                 else:
-                    _agent_tools.append(MCP(toolset.url))
+                    try:
+                        if is_valid_server(toolset.url):
+                            _agent_tools.append(MCP(toolset.url))
+                        else:
+                            logger.error(f"Invalid MCP server: {toolset.url}")
+                            pass
+                    except Exception as e:
+                        logger.error(f"Error adding MCP toolset {toolset.url}: {e}")
+                        pass
+
             elif toolset.type == ToolType.HTTP:
                 _http_toolset = http_toolset_factory(toolset, toolset.tools)
                 _agent_tools.append(_http_toolset)

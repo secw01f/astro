@@ -3,6 +3,7 @@ import asyncio
 import time
 
 from haystack.components.agents import Agent
+from haystack.dataclasses import ChatMessage
 from haystack.tools import ComponentTool, Tool, Toolset
 from haystack.components.tools import ToolInvoker
 
@@ -139,6 +140,33 @@ class SupportingAgent(Agent):
         self._agent_description = description
 
         super().__init__(**kwargs)
+
+    @staticmethod
+    def _args_kwargs_for_agent_run(args: tuple, kwargs: dict):
+        kwargs = dict(kwargs)
+        if args:
+            return args, kwargs
+        if "messages" in kwargs:
+            return (), kwargs
+        if "prompt" in kwargs:
+            # Keep ``prompt`` in kwargs: ChatPromptBuilder still needs it for
+            # ``required_variables`` / ``{{ prompt }}`` in ``user_prompt``.
+            kwargs = dict(kwargs)
+            if "messages" not in kwargs:
+                kwargs["messages"] = [ChatMessage.from_user(kwargs["prompt"])]
+            return (), kwargs
+        raise TypeError(
+            "SupportingAgent.run() missing required argument: 'messages' "
+            "(or tool-style 'prompt')"
+        )
+
+    def run(self, *args, **kwargs):
+        args, kwargs = self._args_kwargs_for_agent_run(args, kwargs)
+        return super().run(*args, **kwargs)
+
+    async def run_async(self, *args, **kwargs):
+        args, kwargs = self._args_kwargs_for_agent_run(args, kwargs)
+        return await super().run_async(*args, **kwargs)
 
     @property
     def component_tool(self):
