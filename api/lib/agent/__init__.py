@@ -149,8 +149,6 @@ class SupportingAgent(Agent):
         if "messages" in kwargs:
             return (), kwargs
         if "prompt" in kwargs:
-            # Keep ``prompt`` in kwargs: ChatPromptBuilder still needs it for
-            # ``required_variables`` / ``{{ prompt }}`` in ``user_prompt``.
             kwargs = dict(kwargs)
             if "messages" not in kwargs:
                 kwargs["messages"] = [ChatMessage.from_user(kwargs["prompt"])]
