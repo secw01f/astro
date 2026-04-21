@@ -1,15 +1,25 @@
 from pydantic import BaseModel
 from typing import Optional
 
+from lib.tool.enums import AuthType
+
 class CreateMCPToolSet(BaseModel):
     name: str
     description: str
     url: str
+    auth_required: Optional[bool] = False
+    auth_type: Optional[AuthType] = None
+    token: Optional[str] = None
+    header: Optional[str] = None
     tools: Optional[list[str]] = None
 
 class CreateHttpToolSet(BaseModel):
     name: str
     description: str
+    auth_required: Optional[bool] = False
+    auth_type: Optional[AuthType] = None
+    token: Optional[str] = None
+    header: Optional[str] = None
     url: str
 
 class ToolDefinition(BaseModel):

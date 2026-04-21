@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 
 from lib.llm.enums import Provider
 from lib.agent.enums import AgentRole, AgentType
-from lib.tool.enums import ToolType
+from lib.tool.enums import ToolType, AuthType
 
 _AGENT_ROLE_PG = SAEnum(
     AgentRole,
@@ -33,6 +33,7 @@ class User(UserBase, table=True):
     created: datetime = Field(default_factory=datetime.utcnow)
     agents: List["Agent"] | None = Relationship(back_populates="user")
     stacks: List["Stack"] | None = Relationship(back_populates="user")
+    credentials: List["Credential"] = Relationship(back_populates="user")
     memories: List["Memory"] = Relationship(back_populates="user")
     llms: List["LLM"] = Relationship(back_populates="user")
 
@@ -49,7 +50,7 @@ class LLMBase(SQLModel):
 
 class LLM(LLMBase, table=True):
     id: int | None = Field(default=None, primary_key=True)
-    key: str | None = Field(default=None, unique=True)
+    credential_id: Optional[int] | None = Field(default=None, foreign_key="credential.id")
     key_id : Optional[str] | None = Field(default=None, unique=True)
     max_tokens: int | None = Field(default=None)
     region: Optional[str] | None = Field(default=None)
@@ -216,8 +217,24 @@ class ToolSet(ToolSetBase, table=True):
     id: int | None = Field(default=None, primary_key=True)
     tools: List["Tool"] = Relationship(back_populates="toolset")
     agents: List["Agent"] = Relationship(back_populates="toolsets", link_model=AgentToolSetLink)
+    auth_required: bool = Field(default=False)
+    auth_type: Optional[AuthType] | None = Field(default=AuthType.BEARER)
+    header: Optional[str] | None = Field(default=None)
+    credential_id: Optional[int] | None = Field(default=None, foreign_key="credential.id")
     type: ToolType
     created: datetime = Field(default_factory=datetime.utcnow)
+    
+    @model_validator(mode="before")
+    def validate_token(self, data: Any) -> Any:
+        if self.auth_required and self.credential_id is None:
+            raise ValueError("A credential is required for an authenticated toolset")
+        return data
+
+    @model_validator(mode="before")
+    def validate_auth_type(self, data: Any) -> Any:
+        if self.auth_required and self.auth_type is None:
+            raise ValueError("An authentication type is required for an authenticated toolset")
+        return data
 
 class ToolSetPublic(ToolSetBase):
     id: int
@@ -226,6 +243,16 @@ class ToolSetPublic(ToolSetBase):
     type: ToolType
     tools: List["ToolPublic"]
     created: datetime
+
+# Credential Models
+class CredentialBase(SQLModel):
+    token: str
+
+class Credential(CredentialBase, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: Optional[int] | None = Field(default=None, foreign_key="user.id")
+    user: Optional["User"] = Relationship(back_populates="credentials")
+    created: datetime = Field(default_factory=datetime.utcnow)
 
 # Message Models
 class MessageBase(SQLModel):

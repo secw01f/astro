@@ -59,13 +59,44 @@ def list_tools_and_toolsets(ctx: click.Context, toolsets: bool, tools: bool, id:
 @click.option("--description", type=click.STRING, required=True, help="Description of the tool")
 @click.option("--type", type=click.Choice(["http", "mcp"]), required=True, help="Type of the tool")
 @click.option("--url", type=click.STRING, required=False, help="URL of the tool")
-def create(ctx: click.Context, name: str, description: str, type: str, url: str):
+@click.option("--auth-required", is_flag=True, default=False, help="Require authentication for this toolset")
+@click.option("--auth-type", type=click.Choice(["bearer", "header"]), required=False, help="Authentication type when auth is required")
+@click.option("--token", type=click.STRING, required=False, help="Raw token used to create a credential when auth is required")
+@click.option("--header", type=click.STRING, required=False, help="Custom header name (required when --auth-type header)")
+def create(
+    ctx: click.Context,
+    name: str,
+    description: str,
+    type: str,
+    url: str,
+    auth_required: bool,
+    auth_type: str | None,
+    token: str | None,
+    header: str | None,
+):
     client = ctx.obj["client"]
+
+    if auth_required and not auth_type:
+        click.echo(red("Failed to create toolset", "bold"))
+        click.echo(white("Error: --auth-type is required when --auth-required is set", "normal"))
+        return
+    if auth_required and not token:
+        click.echo(red("Failed to create toolset", "bold"))
+        click.echo(white("Error: --token is required when --auth-required is set", "normal"))
+        return
+    if auth_required and auth_type == "header" and not header:
+        click.echo(red("Failed to create toolset", "bold"))
+        click.echo(white("Error: --header is required when --auth-type header is set", "normal"))
+        return
+
     payload = {
         "name": name,
         "description": description,
-        "type": type,
-        "url": url
+        "url": url,
+        "auth_required": auth_required,
+        "auth_type": auth_type,
+        "token": token,
+        "header": header,
     }
 
     if type == "mcp":

@@ -1,9 +1,17 @@
 import httpx
 
-from haystack_integrations.tools.mcp import MCPToolset, SSEServerInfo
+from haystack_integrations.tools.mcp import MCPToolset, StreamableHttpServerInfo
+from haystack.utils import Secret
 
-def MCP(server: str, tools: list[str] | None = None) -> MCPToolset:
-    server_info = SSEServerInfo(url=server)
+from lib.tool.enums import AuthType
+
+def MCP(server: str, tools: list[str] | None = None, auth_required: bool = False, auth_type: AuthType | None = None, token: str | None = None, header: str | None = None) -> MCPToolset:
+    server_info = StreamableHttpServerInfo(url=server)
+    if auth_required:
+        if auth_type == AuthType.BEARER:
+            server_info.token = Secret.from_token(token)
+        elif auth_type == AuthType.HEADER:
+            server_info.header =  {header: Secret.from_token(token)}
     if not tools:
         return MCPToolset(server_info=server_info)
     return MCPToolset(server_info=server_info, tool_names=tools)
