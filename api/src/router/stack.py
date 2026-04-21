@@ -10,7 +10,7 @@ from typing import Annotated
 from haystack.dataclasses import ChatMessage, ChatRole
 
 from src.db.db import async_session, session_dep
-from src.db.models import LLM, Agent, Stack, StackPublic, Message, ToolSet, AgentStackLink
+from src.db.models import LLM, Agent, Stack, StackPublic, Message, ToolSet, AgentStackLink, Credential
 from lib.auth.auth import verify_token
 
 from lib.agent import SupervisorAgent, SupportingAgent, StreamingCallback
@@ -18,7 +18,8 @@ from lib.message import event_stream, fanout, storage_consumer, next_position
 from lib.stack.models import CreateStack, ExecuteStack, UpdateStack
 from lib.agent.enums import AgentType
 from lib.agent.prompts import create_prompt
-from lib.llm import chat_generator, decrypt_llm_api_key
+from lib.llm import chat_generator
+from lib.credentials import decrypt_token
 from lib.tool.enums import ToolType
 from lib.tool.mcp import MCP, is_valid_server
 from lib.tool.http import http_toolset_factory
@@ -238,7 +239,12 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
     if _supervisor_llm is None:
         raise HTTPException(status_code=404, detail="Supervisor LLM not found")
 
-    supervisor_llm = chat_generator(_supervisor_llm.provider, _supervisor_llm.model, decrypt_llm_api_key(_supervisor_llm.key), _supervisor_llm.key_id, _supervisor_llm.region, _supervisor_llm.max_tokens)
+    _credential = await session.get(Credential, _supervisor_llm.credential_id)
+    if _credential is None:
+        raise HTTPException(status_code=404, detail="Credential not found")
+    _token = decrypt_token(_credential.token)
+
+    supervisor_llm = chat_generator(_supervisor_llm.provider, _supervisor_llm.model, _token, _supervisor_llm.key_id, _supervisor_llm.region, _supervisor_llm.max_tokens)
     
     run_id = str(uuid.uuid4())
 
@@ -274,21 +280,36 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
         _llm = await session.get(LLM, agent.llm_id)
         if _llm is None:
             raise HTTPException(status_code=404, detail=f"LLM {agent.llm_id} for supporting agent {agent.id} not found")
-        
-        _agent_llm = chat_generator(_llm.provider, _llm.model, decrypt_llm_api_key(_llm.key), _llm.key_id, _llm.region, _llm.max_tokens)
+
+        _credential = await session.get(Credential, _llm.credential_id)
+        if _credential is None:
+            raise HTTPException(status_code=404, detail=f"Credential {_llm.credential_id} for LLM {agent.llm_id} not found")
+        _token = decrypt_token(_credential.token)
+
+        _agent_llm = chat_generator(_llm.provider, _llm.model, _token, _llm.key_id, _llm.region, _llm.max_tokens)
 
         _agent_tools = [MemoryToolset(user_id, app_loop=_app_loop), DateToolset(), MathToolset(), SpecToolset()]
 
         for toolset in agent.toolsets:
+            if toolset.credential_id is not None:
+                _credential = await session.get(Credential, toolset.credential_id)
+                if _credential is None:
+                    raise HTTPException(status_code=404, detail=f"Credential {toolset.credential_id} for toolset {toolset.id} not found")
+                token = decrypt_token(_credential.token)
+            else:
+                token = None
             if toolset.type == ToolType.MCP:
                 tools = []
+                auth_required = toolset.auth_required
+                auth_type = toolset.auth_type
+                header = toolset.header
                 if toolset.tools != None:
                     for tool in toolset.tools:
                         tools.append(tool.name)
                 if len(tools) != 0:
                     try:
                         if is_valid_server(toolset.url):
-                            _agent_tools.append(MCP(toolset.url, tools))
+                            _agent_tools.append(MCP(toolset.url, tools, auth_required, auth_type, token, header))
                         else:
                             logger.error(f"Invalid MCP server: {toolset.url}")
                             pass
@@ -298,7 +319,7 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
                 else:
                     try:
                         if is_valid_server(toolset.url):
-                            _agent_tools.append(MCP(toolset.url))
+                            _agent_tools.append(MCP(toolset.url, auth_required, auth_type, token, header))
                         else:
                             logger.error(f"Invalid MCP server: {toolset.url}")
                             pass
@@ -307,7 +328,12 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
                         pass
 
             elif toolset.type == ToolType.HTTP:
-                _http_toolset = http_toolset_factory(toolset, toolset.tools)
+                if toolset.auth_required and toolset.credential_id is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"HTTP toolset {toolset.id} requires a credential but none is configured",
+                    )
+                _http_toolset = http_toolset_factory(toolset, toolset.tools, token=token)
                 _agent_tools.append(_http_toolset)
 
         _agent = SupportingAgent(
@@ -348,29 +374,29 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
     async def runner():
         fanout_task = asyncio.create_task(fanout_worker())
         storage_task = asyncio.create_task(storage_worker())
+        try:
+            messages_for_run = [ChatMessage.from_user(execute.message)]
+            result = await asyncio.to_thread(supervisor.run, messages=messages_for_run)
 
-        # supervisor.run() is synchronous and CPU/IO-heavy; running it on the main
-        # asyncio thread would block the event loop so fanout/event_stream could not
-        # deliver SSE chunks until completion. Run it in a worker thread instead.
-        messages_for_run = [ChatMessage.from_user(execute.message)]
-        result = await asyncio.to_thread(supervisor.run, messages=messages_for_run)
+            await asyncio.sleep(0)
 
-        await asyncio.sleep(0)
-
-        final_text = None
-        for msg in reversed(result.get("messages") or []):
-            if msg.is_from(ChatRole.ASSISTANT) and msg.text:
-                final_text = msg.text
-                break
-        _callback.emit_final_assistant_text(final_text)
-
-        _callback.end()
-
-        await asyncio.sleep(0)
-        await main_queue.put(None)
-
-        await fanout_task
-        await storage_task
+            final_text = None
+            for msg in reversed((result or {}).get("messages") or []):
+                if msg.is_from(ChatRole.ASSISTANT) and msg.text:
+                    final_text = msg.text
+                    break
+            _callback.emit_final_assistant_text(final_text)
+        except Exception as e:
+            logger.exception("Stack run failed", exc_info=e)
+            _callback.emit_final_assistant_text(
+                f"Stack execution failed: {str(e)}"
+            )
+        finally:
+            _callback.end()
+            await asyncio.sleep(0)
+            await main_queue.put(None)
+            await fanout_task
+            await storage_task
 
     asyncio.create_task(runner())
 

@@ -5,13 +5,14 @@ from sqlmodel import select
 from sqlalchemy.orm import selectinload
 
 from src.db.db import session_dep
-from src.db.models import Tool, ToolPublic, ToolSetPublic, ToolSet, AgentToolSetLink
+from src.db.models import Tool, ToolPublic, ToolSetPublic, ToolSet, AgentToolSetLink, Credential
 from lib.auth.auth import verify_token
 
 from lib.tool.models import CreateMCPToolSet, CreateHttpToolSet
 from lib.tool.enums import ToolType
 from lib.tool.models import ToolsResponse
 from lib.tool.http import get_tools
+from lib.credentials import decrypt_token, encrypt_token
 
 tool_router = APIRouter(prefix="/tool", dependencies=[Depends(verify_token)])
 logger = logging.getLogger(__name__)
@@ -44,8 +45,36 @@ async def get_toolset_by_id(id: int, session: session_dep) -> dict[str, ToolSetP
     return {"toolset": ToolSetPublic.model_validate(toolset)}
 
 @tool_router.post("/create/toolset/mcp")
-async def create_mcp_toolset(toolset: CreateMCPToolSet, session: session_dep) -> dict[str, ToolSetPublic]:
-    new_toolset = ToolSet(name=toolset.name, description=toolset.description, url=toolset.url, type=ToolType.MCP, **({"tools": toolset.tools} if toolset.tools is not None else {}))
+async def create_mcp_toolset(request: Request, toolset: CreateMCPToolSet, session: session_dep) -> dict[str, ToolSetPublic]:
+    claims = getattr(request.state, "claims", None)
+    if not claims or "id" not in claims:
+        raise HTTPException(status_code=401, detail="Missing JWT claims on request")
+    user_id = claims["id"]
+
+    credential_id: int | None = None
+    if toolset.auth_required and toolset.auth_type is None:
+        raise HTTPException(status_code=400, detail="auth_type is required when auth_required is true")
+    if toolset.auth_required and toolset.auth_type.value == "header" and not toolset.header:
+        raise HTTPException(status_code=400, detail="header is required when auth_type is header")
+    if toolset.auth_required and not toolset.token:
+        raise HTTPException(status_code=400, detail="token is required when auth_required is true")
+    if toolset.auth_required and toolset.token:
+        credential = Credential(token=encrypt_token(toolset.token), user_id=user_id)
+        session.add(credential)
+        await session.commit()
+        await session.refresh(credential)
+        credential_id = credential.id
+
+    new_toolset = ToolSet(
+        name=toolset.name,
+        description=toolset.description,
+        url=toolset.url,
+        type=ToolType.MCP,
+        auth_required=toolset.auth_required or False,
+        auth_type=toolset.auth_type,
+        credential_id=credential_id,
+        header=toolset.header,
+    )
     session.add(new_toolset)
     await session.commit()
     await session.refresh(new_toolset)
@@ -75,14 +104,50 @@ async def create_mcp_toolset(toolset: CreateMCPToolSet, session: session_dep) ->
     return {"toolset": ToolSetPublic.model_validate(loaded)}
 
 @tool_router.post("/create/toolset/http")
-async def create_http_toolset(toolset: CreateHttpToolSet, session: session_dep) -> dict[str, ToolSetPublic]:
-    new_toolset = ToolSet(name=toolset.name, description=toolset.description, url=toolset.url, type=ToolType.HTTP)
+async def create_http_toolset(request: Request, toolset: CreateHttpToolSet, session: session_dep) -> dict[str, ToolSetPublic]:
+    claims = getattr(request.state, "claims", None)
+    if not claims or "id" not in claims:
+        raise HTTPException(status_code=401, detail="Missing JWT claims on request")
+    user_id = claims["id"]
+
+    token: str | None = None
+    credential_id: int | None = None
+    if toolset.auth_required and toolset.auth_type is None:
+        raise HTTPException(status_code=400, detail="auth_type is required when auth_required is true")
+    if toolset.auth_required and toolset.auth_type.value == "header" and not toolset.header:
+        raise HTTPException(status_code=400, detail="header is required when auth_type is header")
+    if toolset.auth_required and not toolset.token:
+        raise HTTPException(status_code=400, detail="token is required when auth_required is true")
+    if toolset.auth_required and toolset.token:
+        credential = Credential(token=encrypt_token(toolset.token), user_id=user_id)
+        session.add(credential)
+        await session.commit()
+        await session.refresh(credential)
+        credential_id = credential.id
+        token = decrypt_token(credential.token)
+
+    new_toolset = ToolSet(
+        name=toolset.name,
+        description=toolset.description,
+        url=toolset.url,
+        type=ToolType.HTTP,
+        auth_required=toolset.auth_required or False,
+        auth_type=toolset.auth_type,
+        credential_id=credential_id,
+        header=toolset.header,
+    )
 
     session.add(new_toolset)
     await session.commit()
     await session.refresh(new_toolset)
 
-    tools = await get_tools(new_toolset.url)
+    tools = await get_tools(
+        new_toolset.url,
+        auth_required=new_toolset.auth_required,
+        auth_type=new_toolset.auth_type,
+        token=token,
+        header=new_toolset.header,
+    )
 
     parsed_tools = ToolsResponse.model_validate(tools)
 

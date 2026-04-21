@@ -5,11 +5,11 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from sqlmodel import select
 
 from src.db.db import session_dep
-from src.db.models import Agent, LLM, LLMPublic
+from src.db.models import Agent, LLM, LLMPublic, Credential
 from lib.auth.auth import verify_token
 
 from lib.llm.models import CreateLLM, UpdateLLM
-from lib.llm import encrypt_llm_api_key
+from lib.credentials import encrypt_token
 
 llm_router = APIRouter(prefix="/llm", dependencies=[Depends(verify_token)])
 logger = logging.getLogger(__name__)
@@ -56,11 +56,20 @@ async def new_llm(request: Request, llm: CreateLLM, session: session_dep) -> dic
     user_id = claims["id"]
 
     new_llm = LLM(**{k: v for k, v in llm.model_dump().items()})
-    new_llm.key = encrypt_llm_api_key(llm.key)
+    new_credential = Credential(token=encrypt_token(llm.key))
+    new_credential.user_id = user_id
+
+    session.add(new_credential)
+    await session.commit()
+    await session.refresh(new_credential)
+
     new_llm.user_id = user_id
+
     session.add(new_llm)
+    new_llm.credential_id = new_credential.id
     await session.commit()
     await session.refresh(new_llm)
+    
     return {"llm": LLMPublic.model_validate(new_llm)}
 
 @llm_router.patch("/{id}")
@@ -84,7 +93,7 @@ async def update_llm(request: Request, id: int, session: session_dep, body: Anno
     for key, value in updates.items():
         setattr(existing_llm, key, value)
     if key_plain is not None:
-        existing_llm.key = encrypt_llm_api_key(key_plain)
+        existing_llm.key = encrypt_token(key_plain)
 
     await session.commit()
     await session.refresh(existing_llm)

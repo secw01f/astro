@@ -8,6 +8,20 @@ from haystack.tools import ComponentTool, Tool, Toolset
 from haystack.components.tools import ToolInvoker
 
 _agent_logger = logging.getLogger("haystack.components.agents.agent")
+_RETRY_MAX_ATTEMPTS = 3
+_RETRY_SLEEP_SECONDS = 60
+
+
+def _is_retryable_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return (
+        "rate_limit" in message
+        or "rate limit" in message
+        or "429" in message
+        or "connection error" in message
+        or "timed out" in message
+        or "timeout" in message
+    )
 
 class StreamingCallback:
     def __init__(
@@ -160,11 +174,35 @@ class SupportingAgent(Agent):
 
     def run(self, *args, **kwargs):
         args, kwargs = self._args_kwargs_for_agent_run(args, kwargs)
-        return super().run(*args, **kwargs)
+        for attempt in range(1, _RETRY_MAX_ATTEMPTS + 1):
+            try:
+                return super().run(*args, **kwargs)
+            except Exception as e:
+                if _is_retryable_error(e) and attempt < _RETRY_MAX_ATTEMPTS:
+                    _agent_logger.warning(
+                        f"Supporting agent '{self._agent_name}' failed with a retryable error "
+                        f"(attempt {attempt}/{_RETRY_MAX_ATTEMPTS}): {e}. "
+                        f"Sleeping {_RETRY_SLEEP_SECONDS} seconds."
+                    )
+                    time.sleep(_RETRY_SLEEP_SECONDS)
+                    continue
+                raise
 
     async def run_async(self, *args, **kwargs):
         args, kwargs = self._args_kwargs_for_agent_run(args, kwargs)
-        return await super().run_async(*args, **kwargs)
+        for attempt in range(1, _RETRY_MAX_ATTEMPTS + 1):
+            try:
+                return await super().run_async(*args, **kwargs)
+            except Exception as e:
+                if _is_retryable_error(e) and attempt < _RETRY_MAX_ATTEMPTS:
+                    _agent_logger.warning(
+                        f"Supporting agent '{self._agent_name}' failed with a retryable error "
+                        f"(attempt {attempt}/{_RETRY_MAX_ATTEMPTS}): {e}. "
+                        f"Sleeping {_RETRY_SLEEP_SECONDS} seconds."
+                    )
+                    await asyncio.sleep(_RETRY_SLEEP_SECONDS)
+                    continue
+                raise
 
     @property
     def component_tool(self):

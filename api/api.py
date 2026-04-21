@@ -225,6 +225,55 @@ async def startup_event():
     else:
         logger.info("Default Reporting toolset tools already up to date")
 
+    _appsec_toolset_statement = select(ToolSet).where(
+        ToolSet.name == "Appsec",
+        ToolSet.url == f"{settings.DEFAULT_TOOLS_BASE_URL}/appsec",
+        ToolSet.type == ToolType.HTTP,
+    )
+    appsec_toolset = (await session.exec(_appsec_toolset_statement)).first()
+
+    if appsec_toolset is None:
+        logger.info("Creating default Appsec toolset")
+        appsec_toolset = ToolSet(
+            name="Appsec",
+            description="A toolset for application security",
+            url=f"{settings.DEFAULT_TOOLS_BASE_URL}/appsec",
+            type=ToolType.HTTP,
+        )
+        session.add(appsec_toolset)
+        await session.commit()
+        await session.refresh(appsec_toolset)
+    else:
+        logger.info("Default Appsec toolset already exists")
+
+    _tools = await get_tools(appsec_toolset.url)
+    _parsed_tools = ToolsResponse.model_validate(_tools)
+    _existing_tools_statement = select(Tool).where(Tool.toolset_id == appsec_toolset.id)
+    _existing_tools = (await session.exec(_existing_tools_statement)).all()
+    _existing_tool_names = {tool.name for tool in _existing_tools}
+    created_count = 0
+
+    for tool in _parsed_tools.tools:
+        if tool.name in _existing_tool_names:
+            continue
+        session.add(
+            Tool(
+                name=tool.name,
+                description=tool.description,
+                input=tool.input_schema,
+                toolset_id=appsec_toolset.id,
+                type=ToolType.HTTP,
+                url=appsec_toolset.url,
+            )
+        )
+        created_count += 1
+
+    if created_count > 0:
+        await session.commit()
+        logger.info("Added %s new tool(s) to default Appsec toolset", created_count)
+    else:
+        logger.info("Default Appsec toolset tools already up to date")
+
     logger.info("Default toolsets ready")
 
     logger.info("Startup Complete")
