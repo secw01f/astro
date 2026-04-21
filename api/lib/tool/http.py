@@ -1,10 +1,31 @@
-from typing import Any
-
+import hashlib
+import hmac
+import os
+import time
 import httpx
+
+from typing import Any
+from urllib.parse import urlparse
 from haystack.core.serialization import generate_qualified_class_name
 from haystack.tools import Tool, Toolset
+from settings import settings
 
 from lib.tool.models import ExecuteHTTPTool
+
+def _signed_headers(method: str, url: str) -> dict[str, str]:
+    timestamp = str(int(time.time()))
+    parsed = urlparse(url)
+    path = parsed.path or "/"
+    message = f"{timestamp}:{method.upper()}:{path}".encode("utf-8")
+    signature = hmac.new(
+        settings.SECRET_KEY.encode("utf-8"),
+        message,
+        hashlib.sha256,
+    ).hexdigest()
+    return {
+        "X-Astro-Timestamp": timestamp,
+        "X-Astro-Signature": signature,
+    }
 
 class HttpProxyToolset(Toolset):
     """
@@ -35,9 +56,11 @@ class HttpProxyToolset(Toolset):
             ) -> Any:
                 with httpx.Client(timeout=15.0) as client:
                     payload = ExecuteHTTPTool(tool=_r, arguments=dict(kwargs))
+                    exec_url = f"{_b}/exec"
                     response = client.post(
-                        f"{_b}/exec",
+                        exec_url,
                         json=payload.model_dump(),
+                        headers=_signed_headers("POST", exec_url),
                     )
                     response.raise_for_status()
                     data = response.json()
@@ -93,6 +116,10 @@ def http_toolset_factory(db_toolset, db_tools) -> HttpProxyToolset:
 
 async def get_tools(url) -> dict:
     async with httpx.AsyncClient() as client:
-        r = await client.get((url + "/tools"))
+        tools_url = f"{url}/tools"
+        r = await client.get(
+            tools_url,
+            headers=_signed_headers("GET", tools_url),
+        )
         r.raise_for_status()
         return r.json()

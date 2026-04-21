@@ -2,3 +2,4 @@ fastapi
 uvicorn
 duckduckgo-api-haystack
 python-nmap
+python-dotenv
