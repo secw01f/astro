@@ -299,6 +299,11 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
             else:
                 token = None
             if toolset.type == ToolType.MCP:
+                if toolset.auth_required and toolset.credential_id is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"MCP toolset {toolset.id} requires a credential but none is configured",
+                    )
                 tools = []
                 auth_required = toolset.auth_required
                 auth_type = toolset.auth_type
@@ -308,7 +313,7 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
                         tools.append(tool.name)
                 if len(tools) != 0:
                     try:
-                        if is_valid_server(toolset.url):
+                        if is_valid_server(toolset.url, auth_required, auth_type, token, header):
                             _agent_tools.append(MCP(toolset.url, tools, auth_required, auth_type, token, header))
                         else:
                             logger.error(f"Invalid MCP server: {toolset.url}")
@@ -318,8 +323,16 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
                         pass
                 else:
                     try:
-                        if is_valid_server(toolset.url):
-                            _agent_tools.append(MCP(toolset.url, auth_required, auth_type, token, header))
+                        if is_valid_server(toolset.url, auth_required, auth_type, token, header):
+                            _agent_tools.append(
+                                MCP(
+                                    toolset.url,
+                                    auth_required=auth_required,
+                                    auth_type=auth_type,
+                                    token=token,
+                                    header=header,
+                                )
+                            )
                         else:
                             logger.error(f"Invalid MCP server: {toolset.url}")
                             pass
