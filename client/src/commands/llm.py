@@ -80,7 +80,7 @@ def create(ctx: click.Context, name: str, provider: str, model: str, max_tokens:
 def update_llm(ctx: click.Context, id: int, name: str | None = None, provider: str | None = None, model: str | None = None, max_tokens: int | None = None, key: str | None = None):
     if not key:
         update_prompt = click.prompt("Update Key? (Y/n)", type=str, default="n")
-        if update_prompt == "Y" | update_prompt == "y":
+        if update_prompt.strip().lower() == "y":
             key = click.prompt("Key", type=str, hide_input=True)
 
     client = ctx.obj["client"]
@@ -114,7 +114,7 @@ def update_llm(ctx: click.Context, id: int, name: str | None = None, provider: s
 def delete_llm(ctx: click.Context, id: int):
     client = ctx.obj["client"]
 
-    delete_response = client.delete(f"/llm/llm/{id}")
+    delete_response = client.delete(f"/llm/{id}")
 
     if delete_response.status_code != 200:
         click.echo(red("Failed to delete LLM", "bold"))
