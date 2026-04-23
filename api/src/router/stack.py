@@ -262,7 +262,7 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
 
     supervisor = SupervisorAgent(
         chat_generator=supervisor_llm,
-        system_prompt=create_prompt(_stack_supervisor.system_prompt),
+        system_prompt=create_prompt(_stack_supervisor.system_prompt, AgentType.SUPERVISOR),
         streaming_callback=_callback
     )
 
@@ -353,7 +353,7 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
             chat_generator=_agent_llm,
             name=agent.name,
             description=agent.description,
-            system_prompt=create_prompt(agent.system_prompt),
+            system_prompt=create_prompt(agent.system_prompt, AgentType.SUPPORTING),
             user_prompt="""{% message role="user" %}{{prompt}}{% endmessage %}""",
             required_variables=["prompt"],
             tools=_agent_tools,

@@ -93,7 +93,12 @@ async def update_llm(request: Request, id: int, session: session_dep, body: Anno
     for key, value in updates.items():
         setattr(existing_llm, key, value)
     if key_plain is not None:
-        existing_llm.key = encrypt_token(key_plain)
+        if existing_llm.credential_id is None:
+            raise HTTPException(status_code=400, detail="LLM credential is missing")
+        credential = await session.get(Credential, existing_llm.credential_id)
+        if credential is None:
+            raise HTTPException(status_code=404, detail="Credential not found")
+        credential.token = encrypt_token(key_plain)
 
     await session.commit()
     await session.refresh(existing_llm)
