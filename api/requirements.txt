@@ -13,3 +13,4 @@ pwdlib[argon2]
 asyncpg
 pgvector[all]
 httpx
+redis

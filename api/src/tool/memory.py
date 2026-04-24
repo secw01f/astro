@@ -4,6 +4,7 @@ from fastembed import TextEmbedding
 from haystack.tools import Toolset, tool
 from sqlmodel import select, literal
 
+from settings import settings
 from src.db.db import async_session
 from src.db.models import Memory
 from lib.tool import run_sync
@@ -21,6 +22,33 @@ def _get_model() -> TextEmbedding:
 def _embed(text: str) -> list[float]:
     return list(_get_model().embed([text]))[0].tolist()
 
+
+def _truncate_text(content: str, max_chars: int) -> tuple[str, bool]:
+    if len(content) <= max_chars:
+        return content, False
+    return content[:max_chars].rstrip() + "... [truncated]", True
+
+
+def _trim_memory_rows(rows: list[dict]) -> list[dict]:
+    per_item_limit = max(1, settings.MEMORY_ITEM_MAX_CHARS)
+    total_limit = max(1, settings.TOOL_OUTPUT_MAX_CHARS)
+
+    trimmed: list[dict] = []
+    total_chars = 0
+    for row in rows:
+        content = str(row.get("content", ""))
+        truncated_content, content_was_truncated = _truncate_text(content, per_item_limit)
+        candidate = {**row, "content": truncated_content}
+        if content_was_truncated:
+            candidate["truncated"] = True
+
+        candidate_chars = len(str(candidate))
+        if trimmed and total_chars + candidate_chars > total_limit:
+            break
+        trimmed.append(candidate)
+        total_chars += candidate_chars
+    return trimmed
+
 async def _store_memory(user_id: int, content: str, category: str | None = None) -> dict:
     async with async_session() as session:
         memory = Memory(
@@ -35,8 +63,9 @@ async def _store_memory(user_id: int, content: str, category: str | None = None)
         return {"id": memory.id}
 
 async def _recall_memory(
-    user_id: int, query: str, limit: int = 10, category: str | None = None
+    user_id: int, query: str, limit: int = 2, category: str | None = None
 ) -> list[dict]:
+    safe_limit = max(1, min(limit, settings.MEMORY_RECALL_MAX_ITEMS))
     async with async_session() as session:
         distance = Memory.embedding.cosine_distance(_embed(query))
         similarity = (literal(1.0) - distance).label("similarity")
@@ -44,14 +73,14 @@ async def _recall_memory(
             select(Memory, similarity)
             .where(Memory.user_id == user_id)
             .order_by(distance)
-            .limit(limit)
+            .limit(safe_limit)
         )
         if category is not None:
             statement = statement.where(Memory.category == category)
 
         result = await session.exec(statement)
         memories = result.all()
-        return [
+        rows = [
             {
                 "id": mem.id,
                 "content": mem.content,
@@ -61,20 +90,22 @@ async def _recall_memory(
             }
             for mem, sim in memories
         ]
+        return _trim_memory_rows(rows)
 
 async def _list_memories(user_id: int, limit: int = 10, category: str | None = None) -> list[dict]:
+    safe_limit = max(1, min(limit, settings.MEMORY_LIST_MAX_ITEMS))
     async with async_session() as session:
         statement = (
             select(Memory)
             .where(Memory.user_id == user_id)
             .order_by(Memory.created.desc())
-            .limit(limit)
+            .limit(safe_limit)
         )
         if category is not None:
             statement = statement.where(Memory.category == category)
         result = await session.exec(statement)
         memories = result.all()
-        return [
+        rows = [
             {
                 "id": mem.id,
                 "content": mem.content,
@@ -83,6 +114,7 @@ async def _list_memories(user_id: int, limit: int = 10, category: str | None = N
             }
             for mem in memories
         ]
+        return _trim_memory_rows(rows)
 
 async def _delete_memory(user_id: int, memory_id: int) -> dict:
     async with async_session() as session:

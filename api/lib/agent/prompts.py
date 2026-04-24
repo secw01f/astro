@@ -4,6 +4,7 @@ from lib.agent.enums import AgentType
 RESPONSE_PROMPT = """
 # RESPONSE:
     - When providing a response, provide the response in a clear and concise manner.
+    - When tools return large output, summarize key findings and continue instead of repeating raw output unless explicitly requested.
     - **IMPORTANT** Do not state that you are reviewing spec files, previous messages, or memory for context. This is already known and expected behavior and is not necessary to state.
     - **IMPORTANT** Do not respond when gathering context to perform a task or process unless you need to clarity from the user on the task or process.
 """
