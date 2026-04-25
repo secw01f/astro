@@ -5,6 +5,7 @@ from lib.color import cyan, green, magenta, red, white
 from lib.wizard import select_many_ids, select_one
 
 from lib.stack import get_agents_by_type, stream
+from lib.banner import banner
 
 def _return_stack(stack: dict) -> None:
     click.echo(
@@ -187,6 +188,11 @@ def delete_stack(ctx: click.Context, id: int, yes: bool):
 def execute_stack(ctx: click.Context, id: int):
     sync_client = ctx.obj["client"]
 
+    user_response = sync_client.get("/auth/user/me")
+    user = user_response.json()["user"]
+    username = user["username"]
+    
+
     stack_response = sync_client.get(f"/stack/{id}")
     if stack_response.status_code != 200:
         click.echo(red("Failed to load stack", "bold"))
@@ -197,9 +203,19 @@ def execute_stack(ctx: click.Context, id: int):
     supervisors = [a for a in agents if a.get("agent_type") == "supervisor"]
     name = supervisors[0]["name"] if supervisors else stack["name"]
 
+    click.echo(green("____________________________________________________________", "bold"))
+    click.echo(f"{green('Stack:', 'bold')} {stack['name']}")
+    click.echo(f"{green('Description:', 'bold')} {stack['description']}")
+    click.echo(f"{green('Created:', 'bold')} {stack['created']}")
+    click.echo("")
+    click.echo(f"{green('Supervisor:', 'bold')} {supervisors[0]['name']}")
+    click.echo(f"{green('Supporting:', 'bold')} {', '.join([a['name'] for a in agents if a.get('agent_type') == 'supporting'])}")
+    click.echo(green("____________________________________________________________", "bold"))
+    click.echo("")
+
     while True:
         try:
-            input = click.prompt(magenta("You", "bold"))
+            input = click.prompt(magenta(f"{username}@astro", "bold"))
         except (click.Abort, EOFError, KeyboardInterrupt):
             break
         
@@ -224,9 +240,9 @@ def execute_stack(ctx: click.Context, id: int):
                 messages = response.json()["messages"]
                 for message in messages:
                     if message["role"] == "assistant":
-                        click.echo(f"{cyan(f"{message['role'].capitalize()}", "bold")} {white(f"{message['content']}", "normal")}")
+                        click.echo(f"{cyan(f"{message['role'].capitalize()}:", "bold")} {white(f"{message['content']}", "normal")}")
                     elif message["role"] == "user":
-                        click.echo(f"{magenta("You", "bold")} {white(f"{message['content']}", "normal")}")
+                        click.echo(f"{magenta(f"{username}@astro:", "bold")} {white(f"{message['content']}", "normal")}")
                     click.echo("")
             elif cmd == "/help" or cmd == "/h":
                 for command, description in _chat_commands.items():
