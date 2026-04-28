@@ -37,6 +37,30 @@ async def storage_consumer(
             messages[key] = messages.get(key, "") + item["content"]
         elif item["type"] == "response":
             messages[key] = item.get("content") or ""
+        elif item["type"] == "tool_result":
+            pos = position_state["next"]
+            position_state["next"] = pos + 1
+            payload = {
+                "kind": "tool_result",
+                "agent": item.get("agent"),
+                "run_id": item.get("run_id"),
+                "tool_name": item.get("tool_name"),
+                "tool_call_id": item.get("tool_call_id"),
+                "arguments_preview": item.get("arguments_preview"),
+                "result_preview": item.get("result_preview"),
+                "error": item.get("error"),
+                "finish_reason": item.get("finish_reason"),
+                "timestamp": item.get("timestamp"),
+            }
+            session.add(
+                Message(
+                    role="tool",
+                    content=json.dumps(payload, default=str),
+                    stack_id=stack_id,
+                    position=pos,
+                )
+            )
+            await session.commit()
         elif item["type"] == "end":
             full_message = messages.get(key, "")
 
@@ -61,6 +85,8 @@ async def fanout(
     storage_queue: asyncio.Queue,
     *,
     storage_only_types: frozenset[str] = frozenset({"response"}),
+    verbose: bool = True,
+    supervisor_agent_name: str | None = None,
 ):
     while True:
         item = await source.get()
@@ -71,7 +97,14 @@ async def fanout(
             break
 
         typ = item.get("type") if isinstance(item, dict) else None
-        if typ not in storage_only_types:
+        to_client = typ not in storage_only_types
+        if typ in ("tool_call", "tool_result"):
+            to_client = False
+        if to_client and not verbose and supervisor_agent_name is not None:
+            agent_name = item.get("agent") if isinstance(item, dict) else None
+            if agent_name != supervisor_agent_name:
+                to_client = False
+        if to_client:
             await client_queue.put(item)
         await storage_queue.put(item)
 

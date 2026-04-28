@@ -349,6 +349,12 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
                 _http_toolset = http_toolset_factory(toolset, toolset.tools, token=token)
                 _agent_tools.append(_http_toolset)
 
+        _support_stream = StreamingCallback(
+            agent.name,
+            main_queue,
+            run_id,
+            loop=_app_loop,
+        )
         _agent = SupportingAgent(
             chat_generator=_agent_llm,
             name=agent.name,
@@ -357,6 +363,7 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
             user_prompt="""{% message role="user" %}{{prompt}}{% endmessage %}""",
             required_variables=["prompt"],
             tools=_agent_tools,
+            streaming_callback=_support_stream,
         )
 
         supervisor.register_supporting_agent(_agent)
@@ -382,7 +389,13 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
             await storage_consumer(storage_queue, storage_session, id, assistant_position_state)
 
     async def fanout_worker():
-        await fanout(main_queue, client_queue, storage_queue)
+        await fanout(
+            main_queue,
+            client_queue,
+            storage_queue,
+            verbose=execute.verbose,
+            supervisor_agent_name=_stack_supervisor.name,
+        )
 
     async def runner():
         fanout_task = asyncio.create_task(fanout_worker())

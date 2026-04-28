@@ -1,6 +1,8 @@
+import json
 import logging
 import asyncio
 import time
+from typing import Any
 
 from haystack.components.agents import Agent
 from haystack.dataclasses import ChatMessage
@@ -22,6 +24,51 @@ def _is_retryable_error(exc: Exception) -> bool:
         or "timed out" in message
         or "timeout" in message
     )
+
+_TOOL_STREAM_PREVIEW_CHARS = 2000
+
+def _preview_stream_text(text: str, max_chars: int = _TOOL_STREAM_PREVIEW_CHARS) -> str:
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "... [truncated]"
+
+def _stringify_tool_result_content(result: Any) -> str:
+    if result is None:
+        return ""
+    if isinstance(result, str):
+        return result
+    if isinstance(result, list):
+        parts: list[str] = []
+        for part in result:
+            text = getattr(part, "text", None)
+            if isinstance(text, str):
+                parts.append(text)
+            else:
+                parts.append(str(part))
+        return "\n".join(parts)
+    return str(result)
+
+def _serialize_tool_call_result(tcr: Any) -> dict[str, Any]:
+    origin = getattr(tcr, "origin", None)
+    tool_name = getattr(origin, "tool_name", None) if origin is not None else None
+    tool_call_id = getattr(origin, "id", None) if origin is not None else None
+    args_preview = ""
+    if origin is not None:
+        args = getattr(origin, "arguments", None)
+        if args is not None:
+            try:
+                args_preview = _preview_stream_text(json.dumps(args, default=str))
+            except Exception:
+                args_preview = _preview_stream_text(str(args))
+    result_raw = getattr(tcr, "result", None)
+    result_preview = _preview_stream_text(_stringify_tool_result_content(result_raw))
+    return {
+        "tool_name": tool_name,
+        "tool_call_id": tool_call_id,
+        "arguments_preview": args_preview,
+        "result_preview": result_preview,
+        "error": bool(getattr(tcr, "error", False)),
+    }
 
 class StreamingCallback:
     def __init__(
@@ -53,7 +100,26 @@ class StreamingCallback:
             self._loop.call_soon_threadsafe(self.queue.put_nowait, item)
 
     def __call__(self, chunk):
-        if chunk.tool_call_result is not None:
+        if getattr(chunk, "tool_call_result", None) is not None:
+            if not self.started:
+                self.started = True
+                self._enqueue({
+                    "type": "start",
+                    "agent": self.name,
+                    "run_id": self.run_id,
+                    "timestamp": time.time(),
+                })
+            payload = {
+                "type": "tool_result",
+                "agent": self.name,
+                "run_id": self.run_id,
+                "timestamp": time.time(),
+                **_serialize_tool_call_result(chunk.tool_call_result),
+            }
+            finish_reason = getattr(chunk, "finish_reason", None)
+            if finish_reason is not None:
+                payload["finish_reason"] = finish_reason
+            self._enqueue(payload)
             return
 
         if chunk.start and not self.started:
