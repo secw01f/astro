@@ -9,6 +9,7 @@ class CreateStack(BaseModel):
 
 class ExecuteStack(BaseModel):
     message: str
+    verbose: bool = False
 
 class UpdateStack(BaseModel):
     name: Optional[str] = None

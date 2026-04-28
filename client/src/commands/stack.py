@@ -184,14 +184,18 @@ def delete_stack(ctx: click.Context, id: int, yes: bool):
 
 @stacks.command(name="exec", help="Execute a stack")
 @click.pass_context
+@click.option("--verbose", "--v", is_flag=True, help="Verbose output including agent and tool calls")
 @click.argument("id", type=click.INT)
-def execute_stack(ctx: click.Context, id: int):
+def execute_stack(ctx: click.Context, id: int, verbose: bool):
     sync_client = ctx.obj["client"]
 
     user_response = sync_client.get("/auth/user/me")
     user = user_response.json()["user"]
     username = user["username"]
     
+    if verbose:
+        click.echo(green("Verbose output enabled", "bold"))
+        click.echo("")
 
     stack_response = sync_client.get(f"/stack/{id}")
     if stack_response.status_code != 200:
@@ -260,7 +264,7 @@ def execute_stack(ctx: click.Context, id: int):
             continue
         click.secho("")
 
-        asyncio.run(stream(ctx, id, message, name))
+        asyncio.run(stream(ctx, id, message, name, verbose=verbose))
 
     click.echo("")
     click.echo(white("Exiting chat...", "bold"))

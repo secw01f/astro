@@ -2,7 +2,7 @@ import click
 import json
 import httpx
 
-from lib.color import cyan, red, white
+from lib.color import cyan, magenta, red, white
 
 def get_agents_by_type(ctx: click.Context) -> tuple[list[dict], list[dict]] | tuple[None, None]:
     client = ctx.obj["client"]
@@ -17,15 +17,16 @@ def get_agents_by_type(ctx: click.Context) -> tuple[list[dict], list[dict]] | tu
     supporting_agents = [agent for agent in agents if agent.get("agent_type") == "supporting"]
     return supervisors, supporting_agents
 
-async def stream(ctx: click.Context, id: int, message: str, name: str) -> None:
+async def stream(ctx: click.Context, id: int, message: str, name: str, *, verbose: bool = False) -> None:
     client = ctx.obj["async_client"]
 
     try:
         stream_timeout = httpx.Timeout(connect=30.0, read=None, write=30.0, pool=30.0)
+        payload = {"message": message, "verbose": verbose}
         async with client.stream(
             "POST",
             f"/stack/{id}/exec",
-            json={"message": message},
+            json=payload,
             timeout=stream_timeout,
         ) as response:
             if response.status_code != 200:
@@ -34,7 +35,13 @@ async def stream(ctx: click.Context, id: int, message: str, name: str) -> None:
                 click.echo(white(f"Error: {response.text}", "normal"))
                 return
 
-            click.secho(cyan(f"{name}: ", "bold"))
+            if verbose:
+                click.secho(white("Verbose stream (each agent is labeled when their tokens begin).", "normal"))
+                click.secho("")
+            else:
+                click.secho(cyan(f"{name}: ", "bold"))
+
+            last_token_agent: str | None = None
 
             async for line in response.aiter_lines():
                 if not line.startswith("data: "):
@@ -45,11 +52,17 @@ async def stream(ctx: click.Context, id: int, message: str, name: str) -> None:
                 except json.JSONDecodeError:
                     continue
 
-                if data.get("type") == "token":
-                    click.secho(data.get("content"), nl=False)
-                elif data.get("type") == "end":
+                typ = data.get("type")
+                if typ == "token":
+                    ag = data.get("agent")
+                    if verbose and isinstance(ag, str) and ag != last_token_agent:
+                        click.secho("")
+                        click.secho(magenta(f"{ag}: ", "bold"), nl=False)
+                        last_token_agent = ag
+                    click.secho(data.get("content") or "", nl=False)
+                elif typ == "end":
                     break
-                elif data.get("type") == "error":
+                elif typ == "error":
                     click.secho("")
                     click.secho(red(data.get("content"), "bold"))
                     break
