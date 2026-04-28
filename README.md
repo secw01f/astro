@@ -180,6 +180,8 @@ Or use environment variables:
 | LLMs | `astro llm list` |
 | Docs | `astro docs` |
 
+![cli-screenshot](img/astro-screenshot.png)
+
 ---
 
 ## Project Layout
