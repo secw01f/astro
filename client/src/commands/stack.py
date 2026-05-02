@@ -5,7 +5,6 @@ from lib.color import cyan, green, magenta, red, white
 from lib.wizard import select_many_ids, select_one
 
 from lib.stack import get_agents_by_type, stream
-from lib.banner import banner
 
 def _return_stack(stack: dict) -> None:
     click.echo(
@@ -25,6 +24,8 @@ _chat_commands = {
     "/h": "Show the help",
     "/info": "Show the Stack info",
     "/i": "Show the Stack info",
+    "/f": "Upload a file",
+    "/file": "Upload a file",
 }
 
 @click.group(help="Manage ASTRO stacks")

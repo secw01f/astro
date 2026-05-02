@@ -1,10 +1,34 @@
 from pydantic import BaseModel
+from typing import Optional
+
+from lib.auth.enums import Role
+from src.db.models import UserPublic
 
 class Login(BaseModel):
     username: str
     password: str
 
-class RegisterUser(BaseModel):
+class CreateUser(BaseModel):
     username: str
     email: str
-    password: str
+    password: Optional[str] = None
+    role: Role
+
+
+class CreateUserResponse(BaseModel):
+    user: UserPublic
+    reset_token: str
+
+class ResetPassword(BaseModel):
+    new_password: str
+
+class UpdateUser(BaseModel):
+    username: Optional[str] = None
+    email: Optional[str] = None
+    role: Optional[Role] = None
+    enabled: Optional[bool] = None
+
+class UpdateMe(BaseModel):
+    username: Optional[str] = None
+    email: Optional[str] = None
+    new_password: Optional[str] = None

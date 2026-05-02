@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from lib.llm.enums import Provider
 from lib.agent.enums import AgentRole, AgentType
 from lib.tool.enums import ToolType, AuthType
+from lib.auth.enums import Role
 
 _AGENT_ROLE_PG = SAEnum(
     AgentRole,
@@ -30,6 +31,8 @@ class UserBase(SQLModel):
 class User(UserBase, table=True):
     id: int | None = Field(default=None, primary_key=True)
     password: str
+    role: Role = Field(default=Role.USER)
+    enabled: bool | None= Field(default=True)
     created: datetime = Field(default_factory=datetime.utcnow)
     agents: List["Agent"] | None = Relationship(back_populates="user")
     stacks: List["Stack"] | None = Relationship(back_populates="user")
@@ -41,6 +44,8 @@ class UserPublic(UserBase):
     id: int
     username: str
     email: str
+    role: Role
+    enabled: bool
     created: datetime
 
 # LLM Models
