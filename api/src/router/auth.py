@@ -204,3 +204,29 @@ async def delete_user(request: Request, id: int, session: session_dep, _roles: A
     logger.info(f"User {user.id} deleted by {user_id}")
 
     return {"message": "User deleted successfully"}
+
+@auth_router.get("/user/{id}")
+async def get_user_by_id(request: Request, id: int, session: session_dep, _roles: Annotated[None, Depends(required_roles([Role.ADMIN]))]) -> dict[str, UserPublic]:
+    claims = getattr(request.state, "claims", None)
+
+    if not claims or "id" not in claims:
+        raise HTTPException(status_code=401, detail="Missing JWT claims on request")
+
+    statement = select(User).where(User.id == id)
+    result = await session.exec(statement)
+    user = result.first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"user": UserPublic.model_validate(user)}
+
+@auth_router.get("/users")
+async def get_all_users(request: Request, session: session_dep, _roles: Annotated[None, Depends(required_roles([Role.ADMIN]))]) -> dict[str, list[UserPublic]]:
+    claims = getattr(request.state, "claims", None)
+
+    if not claims or "id" not in claims:
+        raise HTTPException(status_code=401, detail="Missing JWT claims on request")
+
+    statement = select(User)
+    result = await session.exec(statement)
+    users = result.all()
+    return {"users": [UserPublic.model_validate(user) for user in users]}

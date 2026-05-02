@@ -131,3 +131,29 @@ def reset_password(ctx: click.Context, token: str):
         click.echo(white(f"Error: {response.text}", "normal"))
         return
     click.echo(green("Password reset successfully", "bold"))
+
+@auth.command()
+@click.pass_context
+def users(ctx: click.Context):
+    client = ctx.obj["client"]
+    response = client.get("/auth/users")
+    if response.status_code != 200:
+        click.echo(red("Failed to get users", "bold"))
+        click.echo(white(f"Error: {response.text}", "normal"))
+        return
+    users = response.json()["users"]
+    for user in users:
+        click.echo(f"{cyan("ID:", "bold")} {user['id']}\n{cyan("Username:", "bold")} {user['username']}\n{cyan("Email:", "bold")} {user['email']}\n{cyan("Role:", "bold")} {user['role']}\n{cyan("Enabled:", "bold")} {user['enabled']}")
+
+@auth.command()
+@click.pass_context
+@click.option("--id", "user_id", required=True, type=int, help="User ID to get")
+def user(ctx: click.Context, user_id: int):
+    client = ctx.obj["client"]
+    response = client.get(f"/auth/user/{user_id}")
+    if response.status_code != 200:
+        click.echo(red("Failed to get user", "bold"))
+        click.echo(white(f"Error: {response.text}", "normal"))
+        return
+    user = response.json()["user"]
+    click.echo(f"{cyan("ID:", "bold")} {user['id']}\n{cyan("Username:", "bold")} {user['username']}\n{cyan("Email:", "bold")} {user['email']}\n{cyan("Role:", "bold")} {user['role']}\n{cyan("Enabled:", "bold")} {user['enabled']}")
