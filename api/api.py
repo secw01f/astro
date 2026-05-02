@@ -1,4 +1,6 @@
 import logging
+import json
+import redis.asyncio as redis
 
 from fastapi import FastAPI
 from sqlmodel import select
@@ -6,6 +8,7 @@ from sqlmodel import select
 from src.logging.config import log_config
 from settings import settings
 from lib.auth.auth import create_user, generate_password
+from lib.auth.enums import Role
 from src.db.db import init_db, async_session
 from src.db.models import User, ToolSet, Tool, Prompt
 from lib.agent.prompts import APPLICATION_SECURITY_SUPERVISOR_PROMPT, GOVERNANCE_RISK_COMPLIANCE_SUPERVISOR_PROMPT, DETECTION_INCIDENT_RESPONSE_SUPERVISOR_PROMPT, OFFENSIVE_SECURITY_SUPERVISOR_PROMPT, VULNERABILITY_MANAGEMENT_SUPERVISOR_PROMPT, APPLICATION_SECURITY_ARCHITECT_PROMPT, DETECTION_INCIDENT_RESPONSE_ARCHITECT_PROMPT, SECURITY_ENGINEERING_ARCHITECT_PROMPT, APPLICATION_SECURITY_ENGINEER_PROMPT, GOVERNANCE_RISK_COMPLIANCE_ENGINEER_PROMPT, DETECTION_INCIDENT_RESPONSE_ENGINEER_PROMPT, OFFENSIVE_SECURITY_ENGINEER_PROMPT, VULNERABILITY_MANAGEMENT_ENGINEER_PROMPT, APPLICATION_SECURITY_ANALYST_PROMPT, GOVERNANCE_RISK_COMPLIANCE_ANALYST_PROMPT, DETECTION_INCIDENT_RESPONSE_ANALYST_PROMPT, OFFENSIVE_SECURITY_ANALYST_PROMPT, VULNERABILITY_MANAGEMENT_ANALYST_PROMPT
@@ -41,9 +44,22 @@ async def startup_event():
         if not existing_user:
             logger.info("Creating default \"stack\" User")
             password = generate_password(16)
-            await create_user(session, "stack", "stack@stack.local", password)
-            logger.info(f"Username: stack")
-            logger.info(f"Password: {password}")
+            await create_user(session, "stack", "stack@stack.local", password, Role.ADMIN)
+            with open("/api/stack_user.json", "w") as f:
+                json.dump({
+                    "username": "stack",
+                    "email": "stack@stack.local",
+                    "password": password,
+                }, f)
+            logger.info(f"Stack user created and saved to /api/stack_user.json")
+            client = redis.from_url(settings.REDIS_URL, decode_responses=True)
+            try:
+                await client.set(f"auth:default_stack_user_active", "1")
+                logger.info(f"Default stack user active set in Redis")
+                await client.aclose()
+            except Exception as e:
+                logger.error(f"Failed to set default stack user active in Redis: {e}")
+                await client.aclose()
         else:
             logger.info(f"Default user already exists")
 

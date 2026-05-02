@@ -134,7 +134,7 @@ This will:
 - API → http://localhost:8000  
 - CLI → `astro --help`
 
-> On first run, default credentials are generated—check API logs.
+> On first run, one time use credentials are output for the default `stack` user. Once logged in the token is only valid for 10 minutes to create a new user with `astro auth create`.
 
 ---
 
