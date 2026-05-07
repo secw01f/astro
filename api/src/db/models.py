@@ -230,12 +230,6 @@ class ToolSet(ToolSetBase, table=True):
     created: datetime = Field(default_factory=datetime.utcnow)
     
     @model_validator(mode="before")
-    def validate_token(self, data: Any) -> Any:
-        if self.auth_required and self.credential_id is None:
-            raise ValueError("A credential is required for an authenticated toolset")
-        return data
-
-    @model_validator(mode="before")
     def validate_auth_type(self, data: Any) -> Any:
         if self.auth_required and self.auth_type is None:
             raise ValueError("An authentication type is required for an authenticated toolset")
