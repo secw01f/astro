@@ -5,9 +5,9 @@ from fastapi import APIRouter, HTTPException
 from lib.models import ToolsResponse, Tool, ExecTool, ExecResponse
 from src.asm.tools import Registry
 
-web_router = APIRouter(prefix="/asm")
+asm_router = APIRouter(prefix="/asm")
 
-@web_router.get("/tools")
+@asm_router.get("/tools")
 async def list_tools() -> ToolsResponse:
     return ToolsResponse(
     tools=[
@@ -20,7 +20,7 @@ async def list_tools() -> ToolsResponse:
     ]
 )
 
-@web_router.post("/exec")
+@asm_router.post("/exec")
 async def exec_tool(exec: ExecTool):
     tool = Registry.get(exec.tool)
 
