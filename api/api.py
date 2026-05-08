@@ -290,8 +290,177 @@ async def startup_event():
     else:
         logger.info("Default Appsec toolset tools already up to date")
 
-    logger.info("Default toolsets ready")
+    _asm_toolset_statement = select(ToolSet).where(
+        ToolSet.name == "ASM",
+        ToolSet.url == f"{settings.DEFAULT_TOOLS_BASE_URL}/asm",
+        ToolSet.type == ToolType.HTTP,
+    )
+    asm_toolset = (await session.exec(_asm_toolset_statement)).first()
+    
+    if asm_toolset is None:
+        logger.info("Creating default ASM toolset")
+        asm_toolset = ToolSet(
+            name="ASM",
+            description="A toolset for Attack Surface Management",
+            url=f"{settings.DEFAULT_TOOLS_BASE_URL}/asm",
+            type=ToolType.HTTP,
+        )
+        session.add(asm_toolset)
+        await session.commit()
+        await session.refresh(asm_toolset)
+    else:
+        logger.info("Default ASM toolset already exists")
 
+    _tools = await get_tools(asm_toolset.url)
+    _parsed_tools = ToolsResponse.model_validate(_tools)
+    _existing_tools_statement = select(Tool).where(Tool.toolset_id == asm_toolset.id)
+    _existing_tools = (await session.exec(_existing_tools_statement)).all()
+    _existing_tool_names = {tool.name for tool in _existing_tools}
+    created_count = 0
+
+    for tool in _parsed_tools.tools:
+        if tool.name in _existing_tool_names:
+            continue
+        session.add(
+            Tool(
+                name=tool.name,
+                description=tool.description,
+                input=tool.input_schema,
+                toolset_id=asm_toolset.id,
+                type=ToolType.HTTP,
+                url=asm_toolset.url,
+            )
+        )
+        created_count += 1
+
+    if created_count > 0:
+        await session.commit()
+        logger.info("Added %s new tool(s) to default ASM toolset", created_count)
+    else:
+        logger.info("Default ASM toolset tools already up to date")
+
+    _github_repos_read_only_toolset_statement = select(ToolSet).where(
+        ToolSet.name == "GitHub - Repos Read Only",
+        ToolSet.url == "https://api.githubcopilot.com/mcp/x/repos/readonly",
+        ToolSet.type == ToolType.MCP,
+    )
+    github_repos_read_only_toolset = (await session.exec(_github_repos_read_only_toolset_statement)).first()
+
+    if github_repos_read_only_toolset is None:
+        logger.info("Creating default GitHub - Repos Read Only toolset")
+        github_repos_read_only_toolset = ToolSet(
+            name="GitHub - Repos Read Only",
+            description="A toolset for read only access to GitHub repositories",
+            url="https://api.githubcopilot.com/mcp/x/repos/readonly",
+            type=ToolType.MCP,
+            auth_required=True
+        )
+        session.add(github_repos_read_only_toolset)
+        await session.commit()
+        await session.refresh(github_repos_read_only_toolset)
+
+        logger.info("Default GitHub - Repos Read Only toolset created")
+    else:
+        logger.info("Default GitHub - Repos Read Only toolset already exists")
+
+    _github_repos_full_access_toolset_statement = select(ToolSet).where(
+        ToolSet.name == "GitHub - Repos Full Access",
+        ToolSet.url == "https://api.githubcopilot.com/mcp/x/repos",
+        ToolSet.type == ToolType.MCP,
+    )
+    github_repos_full_access_toolset = (await session.exec(_github_repos_full_access_toolset_statement)).first()
+
+    if github_repos_full_access_toolset is None:
+        logger.info("Creating default GitHub - Repos Full Access toolset")
+        github_repos_full_access_toolset = ToolSet(
+            name="GitHub - Repos Full Access",
+            description="A toolset for full access to GitHub repositories",
+            url="https://api.githubcopilot.com/mcp/x/repos",
+            type=ToolType.MCP,
+            auth_required=True
+        )
+        session.add(github_repos_full_access_toolset)
+        await session.commit()
+        await session.refresh(github_repos_full_access_toolset)
+
+        logger.info("Default GitHub - Repos Full Access toolset created")
+    else:
+        logger.info("Default GitHub - Repos Full Access toolset already exists")
+
+    _github_git_read_only_toolset_statement = select(ToolSet).where(
+        ToolSet.name == "GitHub - Git Read Only",
+        ToolSet.url == "https://api.githubcopilot.com/mcp/x/git/readonly",
+        ToolSet.type == ToolType.MCP,
+    )
+    github_git_read_only_toolset = (await session.exec(_github_git_read_only_toolset_statement)).first()
+    
+    if github_git_read_only_toolset is None:
+        logger.info("Creating default GitHub - Git Read Only toolset")
+        github_git_read_only_toolset = ToolSet(
+            name="GitHub - Git Read Only",
+            description="A toolset for read only access to GitHub Git repositories",
+            url="https://api.githubcopilot.com/mcp/x/git/readonly",
+            type=ToolType.MCP,
+            auth_required=True
+        )
+        session.add(github_git_read_only_toolset)
+        await session.commit()
+        await session.refresh(github_git_read_only_toolset)
+
+        logger.info("Default GitHub - Git Read Only toolset created")
+    else:
+        logger.info("Default GitHub - Git Read Only toolset already exists")
+
+    _github_git_full_access_toolset_statement = select(ToolSet).where(
+        ToolSet.name == "GitHub - Git Full Access",
+        ToolSet.url == "https://api.githubcopilot.com/mcp/x/git",
+        ToolSet.type == ToolType.MCP,
+    )
+    github_git_full_access_toolset = (await session.exec(_github_git_full_access_toolset_statement)).first()
+    
+    if github_git_full_access_toolset is None:
+        logger.info("Creating default GitHub - Git Full Access toolset")
+        github_git_full_access_toolset = ToolSet(
+            name="GitHub - Git Full Access",
+            description="A toolset for full access to GitHub Git repositories",
+            url="https://api.githubcopilot.com/mcp/x/git",
+            type=ToolType.MCP,
+            auth_required=True
+        )
+        session.add(github_git_full_access_toolset)
+        await session.commit()
+        await session.refresh(github_git_full_access_toolset)
+
+        logger.info("Default GitHub - Git Full Access toolset created")
+    else:
+        logger.info("Default GitHub - Git Full Access toolset already exists")
+
+    _github_full_access_toolset_statement = select(ToolSet).where(
+        ToolSet.name == "GitHub Full Access",
+        ToolSet.url == "https://api.githubcopilot.com/mcp/",
+        ToolSet.type == ToolType.MCP,
+    )
+    github_full_access_toolset = (await session.exec(_github_full_access_toolset_statement)).first()
+    
+    if github_full_access_toolset is None:
+        logger.info("Creating default GitHub Full Access toolset")
+        github_full_access_toolset = ToolSet(
+            name="GitHub Full Access",
+            description="A toolset for full access to GitHub",
+            url="https://api.githubcopilot.com/mcp/",
+            type=ToolType.MCP,
+            auth_required=True
+        )
+        session.add(github_full_access_toolset)
+        await session.commit()
+        await session.refresh(github_full_access_toolset)
+
+        logger.info("Default GitHub Full Access toolset created")
+    else:
+        logger.info("Default GitHub Full Access toolset already exists")
+
+    logger.info("Default toolsets ready - Any Toolset that requires authentication will need to have a credential created for it")
+            
     logger.info("Startup Complete")
 
 api.include_router(auth_router)
