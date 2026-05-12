@@ -56,8 +56,6 @@ async def create_mcp_toolset(request: Request, toolset: CreateMCPToolSet, sessio
         raise HTTPException(status_code=400, detail="auth_type is required when auth_required is true")
     if toolset.auth_required and toolset.auth_type.value == "header" and not toolset.header:
         raise HTTPException(status_code=400, detail="header is required when auth_type is header")
-    if toolset.auth_required and not toolset.token:
-        raise HTTPException(status_code=400, detail="token is required when auth_required is true")
     if toolset.auth_required and toolset.token:
         credential = Credential(token=encrypt_token(toolset.token), user_id=user_id)
         session.add(credential)
@@ -116,8 +114,6 @@ async def create_http_toolset(request: Request, toolset: CreateHttpToolSet, sess
         raise HTTPException(status_code=400, detail="auth_type is required when auth_required is true")
     if toolset.auth_required and toolset.auth_type.value == "header" and not toolset.header:
         raise HTTPException(status_code=400, detail="header is required when auth_type is header")
-    if toolset.auth_required and not toolset.token:
-        raise HTTPException(status_code=400, detail="token is required when auth_required is true")
     if toolset.auth_required and toolset.token:
         credential = Credential(token=encrypt_token(toolset.token), user_id=user_id)
         session.add(credential)
@@ -141,29 +137,31 @@ async def create_http_toolset(request: Request, toolset: CreateHttpToolSet, sess
     await session.commit()
     await session.refresh(new_toolset)
 
-    tools = await get_tools(
-        new_toolset.url,
-        auth_required=new_toolset.auth_required,
-        auth_type=new_toolset.auth_type,
-        token=token,
-        header=new_toolset.header,
-    )
-
-    parsed_tools = ToolsResponse.model_validate(tools)
-
-    for tool in parsed_tools.tools:
-        session.add(
-            Tool(
-                name=tool.name,
-                description=tool.description,
-                input=tool.input_schema,
-                toolset_id=new_toolset.id,
-                url=new_toolset.url,
-                type=ToolType.HTTP
-            )
+    can_sync_tools = (not new_toolset.auth_required) or bool(token)
+    if can_sync_tools:
+        tools = await get_tools(
+            new_toolset.url,
+            auth_required=new_toolset.auth_required,
+            auth_type=new_toolset.auth_type,
+            token=token,
+            header=new_toolset.header,
         )
 
-    await session.commit()
+        parsed_tools = ToolsResponse.model_validate(tools)
+
+        for tool in parsed_tools.tools:
+            session.add(
+                Tool(
+                    name=tool.name,
+                    description=tool.description,
+                    input=tool.input_schema,
+                    toolset_id=new_toolset.id,
+                    url=new_toolset.url,
+                    type=ToolType.HTTP
+                )
+            )
+
+        await session.commit()
 
     statement = (
         select(ToolSet)

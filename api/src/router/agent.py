@@ -10,6 +10,7 @@ from lib.auth.auth import verify_token
 
 from lib.agent.enums import AgentRole
 from lib.agent.models import CreateAgent, UpdateAgent, UpdatePrompt
+from lib.tool import validate_toolsets_ready_for_agent
 
 agent_router = APIRouter(prefix="/agent", dependencies=[Depends(verify_token)])
 logger = logging.getLogger(__name__)
@@ -105,6 +106,7 @@ async def update_agent(request: Request, id: int, body: UpdateAgent, session: se
                     status_code=404,
                     detail={"message": "One or more toolsets do not exist", "toolset_ids": sorted(missing)},
                 )
+            validate_toolsets_ready_for_agent(toolsets)
             agent.toolsets = list(toolsets)
 
     session.add(agent)
@@ -165,6 +167,7 @@ async def create_agent(request: Request, agent: CreateAgent, session: session_de
                 status_code=404,
                 detail={"message": "One or more toolsets do not exist", "toolset_ids": sorted(missing)},
             )
+        validate_toolsets_ready_for_agent(toolsets)
         new_agent.toolsets = list(toolsets)
 
     session.add(new_agent)
