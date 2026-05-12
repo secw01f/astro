@@ -4,3 +4,4 @@ duckduckgo-api-haystack
 python-nmap
 python-dotenv
 cvss
+dnspython
