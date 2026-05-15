@@ -12,13 +12,14 @@ from src.recon import recon_router
 from src.appsec import appsec_router
 from src.asm import asm_router
 from src.dns import dns_router
+from src.threatmodel import threatmodel_router
 from lib.tool import loader
 
 load_dotenv()
 
 api = FastAPI()
 SECRET_KEY = os.getenv("SECRET_KEY", "")
-PROTECTED_PREFIXES = ("/web", "/reporting", "/recon", "/appsec", "/asm", "/dns")
+PROTECTED_PREFIXES = ("/web", "/reporting", "/recon", "/appsec", "/asm", "/dns", "/threatmodel")
 MAX_SKEW_SECONDS = 300
 
 
@@ -67,3 +68,4 @@ api.include_router(recon_router)
 api.include_router(appsec_router)
 api.include_router(asm_router)
 api.include_router(dns_router)
+api.include_router(threatmodel_router)

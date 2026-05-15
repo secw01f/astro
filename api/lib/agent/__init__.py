@@ -273,9 +273,12 @@ class SupportingAgent(Agent):
     @property
     def component_tool(self):
         if not hasattr(self, "_component_tool"):
+            description = (self._agent_description or "").strip() or (
+                f"Delegate a task to the {self._agent_name} supporting agent."
+            )
             self._component_tool = ComponentTool(
                 name=self._agent_name,
-                description=self._agent_description,
+                description=description,
                 component=self,
                 parameters={
                     "type": "object",

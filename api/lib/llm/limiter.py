@@ -3,6 +3,7 @@ import hashlib
 import json
 import logging
 import pickle
+import threading
 import time
 
 from typing import Any
@@ -113,7 +114,9 @@ class RedisTokenBucketLimiter:
     def __init__(self) -> None:
         self._redis: Redis | None = None
         self._script_sha: str | None = None
-        self._lock = asyncio.Lock()
+        # threading.Lock: module singleton is used across asyncio.run() / threads;
+        # asyncio.Lock is bound to one event loop and breaks under asyncio.to_thread.
+        self._lock = threading.Lock()
 
     async def _get_redis(self) -> Redis | None:
         if not settings.LLM_LIMITER_ENABLED:
@@ -123,7 +126,7 @@ class RedisTokenBucketLimiter:
             return None
         if self._redis is not None:
             return self._redis
-        async with self._lock:
+        with self._lock:
             if self._redis is None:
                 self._redis = Redis.from_url(settings.REDIS_URL, decode_responses=True)
             return self._redis
@@ -179,7 +182,7 @@ class RedisTokenBucketLimiter:
 class RedisPromptCache:
     def __init__(self) -> None:
         self._redis: Redis | None = None
-        self._lock = asyncio.Lock()
+        self._lock = threading.Lock()
 
     async def _get_redis(self) -> Redis | None:
         if not settings.LLM_PROMPT_CACHE_ENABLED:
@@ -189,7 +192,7 @@ class RedisPromptCache:
             return None
         if self._redis is not None:
             return self._redis
-        async with self._lock:
+        with self._lock:
             if self._redis is None:
                 self._redis = Redis.from_url(settings.REDIS_URL, decode_responses=False)
             return self._redis

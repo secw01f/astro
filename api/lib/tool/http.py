@@ -135,7 +135,7 @@ class HttpProxyToolset(Toolset):
         tools: list[Tool] = []
         for spec in self.tool_specs:
             remote_name = spec["name"]
-            description = spec.get("description") or ""
+            description = (spec.get("description") or "").strip() or f"Execute the {remote_name} tool."
             parameters = spec.get("parameters")
             if not parameters:
                 parameters = {"type": "object", "properties": {}, "required": []}
