@@ -58,6 +58,10 @@ def create(ctx: click.Context, name: str, provider: str, model: str, max_tokens:
         key = click.prompt("Access Key", type=str, hide_input=True)
         key_id = click.prompt("Key ID", type=str)
         region = click.prompt("Region", type=str)
+        click.echo(
+            "For newer Claude models (e.g. anthropic.claude-opus-4-6-v1), use the base model ID; "
+            "ASTRO will map it to a regional inference profile (e.g. us.anthropic.claude-opus-4-6-v1)."
+        )
         if max_tokens is not None:
             response = client.post("/llm/new", json={"name": name, "provider": provider, "key": key, "key_id": key_id, "model": model, "max_tokens": max_tokens, "region": region})
         else:

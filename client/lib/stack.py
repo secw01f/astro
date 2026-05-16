@@ -80,7 +80,7 @@ async def stream(ctx: click.Context, id: int, message: str, name: str, *, verbos
                     click.secho(red(data.get("content"), "bold"))
                     break
 
-            click.secho("/n")
+            click.secho("\n")
     except httpx.ConnectError:
         click.secho(red("Failed to connect to the API", "bold"))
         return

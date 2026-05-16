@@ -4,12 +4,15 @@ import os
 
 class JsonFormatter(logging.Formatter):
     def format(self, record):
-        return json.dumps({
+        payload = {
             "timestamp": self.formatTime(record),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
-        })
+        }
+        if record.exc_info:
+            payload["exception"] = self.formatException(record.exc_info)
+        return json.dumps(payload)
 
 def log_config():
     log_path = "/var/log/astro/astro.log"

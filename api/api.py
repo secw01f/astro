@@ -143,6 +143,55 @@ async def startup_event():
         else:
             logger.info("Default Web toolset tools already up to date")
 
+        _dns_toolset_statement = select(ToolSet).where(
+            ToolSet.name == "DNS",
+            ToolSet.url == f"{settings.DEFAULT_TOOLS_BASE_URL}/dns",
+            ToolSet.type == ToolType.HTTP,
+        )
+        dns_toolset = (await session.exec(_dns_toolset_statement)).first()
+        
+        if dns_toolset is None:
+            logger.info("Creating default DNS toolset")
+            dns_toolset = ToolSet(
+                name="DNS",
+                description="A toolset for DNS",
+                url=f"{settings.DEFAULT_TOOLS_BASE_URL}/dns",
+                type=ToolType.HTTP,
+            )
+            session.add(dns_toolset)
+            await session.commit()
+            await session.refresh(dns_toolset)
+        else:
+            logger.info("Default DNS toolset already exists")
+
+        _tools = await get_tools(dns_toolset.url)
+        _parsed_tools = ToolsResponse.model_validate(_tools)
+        _existing_tools_statement = select(Tool).where(Tool.toolset_id == dns_toolset.id)
+        _existing_tools = (await session.exec(_existing_tools_statement)).all()
+        _existing_tool_names = {tool.name for tool in _existing_tools}
+        created_count = 0
+
+        for tool in _parsed_tools.tools:
+            if tool.name in _existing_tool_names:
+                continue
+            session.add(
+                Tool(
+                    name=tool.name,
+                    description=tool.description,
+                    input=tool.input_schema,
+                    toolset_id=dns_toolset.id,
+                    type=ToolType.HTTP,
+                    url=dns_toolset.url,
+                )
+            )
+            created_count += 1
+
+        if created_count > 0:
+            await session.commit()
+            logger.info("Added %s new tool(s) to default DNS toolset", created_count)
+        else:
+            logger.info("Default DNS toolset tools already up to date")
+
         _recon_toolset_statement = select(ToolSet).where(
             ToolSet.name == "Recon",
             ToolSet.url == f"{settings.DEFAULT_TOOLS_BASE_URL}/recon",
@@ -338,6 +387,55 @@ async def startup_event():
         logger.info("Added %s new tool(s) to default ASM toolset", created_count)
     else:
         logger.info("Default ASM toolset tools already up to date")
+
+    _threatmodel_toolset_statement = select(ToolSet).where(
+        ToolSet.name == "Threat Model",
+        ToolSet.url == f"{settings.DEFAULT_TOOLS_BASE_URL}/threatmodel",
+        ToolSet.type == ToolType.HTTP,
+    )
+    threatmodel_toolset = (await session.exec(_threatmodel_toolset_statement)).first()
+    
+    if threatmodel_toolset is None:
+        logger.info("Creating default Threat Model toolset")
+        threatmodel_toolset = ToolSet(
+            name="Threat Model",
+            description="A toolset for threat modeling",
+            url=f"{settings.DEFAULT_TOOLS_BASE_URL}/threatmodel",
+            type=ToolType.HTTP,
+        )
+        session.add(threatmodel_toolset)
+        await session.commit()
+        await session.refresh(threatmodel_toolset)
+    else:
+        logger.info("Default Threat Model toolset already exists")
+
+    _tools = await get_tools(threatmodel_toolset.url)
+    _parsed_tools = ToolsResponse.model_validate(_tools)
+    _existing_tools_statement = select(Tool).where(Tool.toolset_id == threatmodel_toolset.id)
+    _existing_tools = (await session.exec(_existing_tools_statement)).all()
+    _existing_tool_names = {tool.name for tool in _existing_tools}
+    created_count = 0
+
+    for tool in _parsed_tools.tools:
+        if tool.name in _existing_tool_names:
+            continue
+        session.add(
+            Tool(
+                name=tool.name,
+                description=tool.description,
+                input=tool.input_schema,
+                toolset_id=threatmodel_toolset.id,
+                type=ToolType.HTTP,
+                url=threatmodel_toolset.url,
+            )
+        )
+        created_count += 1
+
+    if created_count > 0:
+        await session.commit()
+        logger.info("Added %s new tool(s) to default Threat Model toolset", created_count)
+    else:
+        logger.info("Default Threat Model toolset tools already up to date")
 
     _github_repos_read_only_toolset_statement = select(ToolSet).where(
         ToolSet.name == "GitHub - Repos Read Only",

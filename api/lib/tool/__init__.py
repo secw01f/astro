@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from typing import TYPE_CHECKING
 
 from haystack.tools import Tool, Toolset, ComponentTool, SearchableToolset
 from haystack_integrations.tools.mcp import MCPToolset
-
-from src.db.models import ToolSet
 from fastapi import HTTPException
+
+if TYPE_CHECKING:
+    from src.db.models import ToolSet
 
 def toolset(tools: list[Tool | Toolset | ComponentTool | MCPToolset]) -> SearchableToolset:
     catalog = tools
