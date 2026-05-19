@@ -65,7 +65,14 @@ def astro(ctx: click.Context):
 def close_client(ctx: click.Context, *_args, **_kwargs):
     async_client = ctx.obj.get("async_client")
     if async_client is not None:
-        asyncio.run(async_client.aclose())
+        try:
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(async_client.aclose())
+            finally:
+                loop.close()
+        except RuntimeError:
+            pass
 
 astro.add_command(config)
 astro.add_command(docs)

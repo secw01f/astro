@@ -98,6 +98,8 @@ async def fanout(
 
         typ = item.get("type") if isinstance(item, dict) else None
         to_client = typ not in storage_only_types
+        if typ == "file_request":
+            to_client = True
         if typ in ("tool_call", "tool_result"):
             to_client = False
         if to_client and not verbose and supervisor_agent_name is not None:

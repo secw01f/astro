@@ -17,7 +17,9 @@ class Settings(BaseSettings):
     MEMORY_LIST_MAX_ITEMS: int = 10
     MEMORY_ITEM_MAX_CHARS: int = 400
     TOOL_OUTPUT_MAX_CHARS: int = 2000
-    
+    FILES_DIR: str = "/var/lib/astro/files"
+    FILE_REQUEST_TIMEOUT_SECONDS: int = 3600
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",

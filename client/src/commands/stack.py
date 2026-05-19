@@ -4,7 +4,7 @@ import asyncio
 from lib.color import cyan, green, magenta, red, white
 from lib.wizard import select_many_ids, select_one
 
-from lib.stack import get_agents_by_type, stream
+from lib.stack import chat_loop, get_agents_by_type
 
 def _return_stack(stack: dict) -> None:
     click.echo(
@@ -24,8 +24,8 @@ _chat_commands = {
     "/h": "Show the help",
     "/info": "Show the Stack info",
     "/i": "Show the Stack info",
-    "/f": "Upload a file",
-    "/file": "Upload a file",
+    "/f": "Upload a file for a pending agent request (requires request id and run id)",
+    "/file": "Upload a file for a pending agent request (requires request id and run id)",
 }
 
 @click.group(help="Manage ASTRO stacks")
@@ -218,54 +218,16 @@ def execute_stack(ctx: click.Context, id: int, verbose: bool):
     click.echo(green("____________________________________________________________", "bold"))
     click.echo("")
 
-    while True:
-        try:
-            input = click.prompt(magenta(f"{username}@astro", "bold"))
-        except (click.Abort, EOFError, KeyboardInterrupt):
-            break
-        
-        message = input.strip()
-
-        if not message:
-            continue
-
-        cmd = message.lower()
-
-        if cmd in (_chat_commands.keys()):
-            if cmd == "/exit" or cmd == "/quit" or cmd == "/q":
-                break
-            elif cmd == "/clear":
-                click.clear()
-            elif cmd == "/history" or cmd == "/h":
-                response = sync_client.post("/message/history", json={"stack_id": id, "limit": 10, "offset": 0})
-                if response.status_code != 200:
-                    click.echo(red("Failed to get message history", "bold"))
-                    click.echo(white(f"Error: {response.text}", "normal"))
-                    continue
-                messages = response.json()["messages"]
-                for message in messages:
-                    if message["role"] == "assistant":
-                        click.echo(f"{cyan(f"{message['role'].capitalize()}:", "bold")} {white(f"{message['content']}", "normal")}")
-                    elif message["role"] == "user":
-                        click.echo(f"{magenta(f"{username}@astro:", "bold")} {white(f"{message['content']}", "normal")}")
-                    click.echo("")
-            elif cmd == "/help" or cmd == "/h":
-                for command, description in _chat_commands.items():
-                    click.echo(f"{green(f"{command}:", "bold")} {white(f"{description}", "normal")}")
-            elif cmd == "/info" or cmd == "/i":
-                response = sync_client.get(f"/stack/{id}")
-                if response.status_code != 200:
-                    click.echo(red("Failed to get stack info", "bold"))
-                    click.echo(white(f"Error: {response.text}", "normal"))
-                    continue
-                stack = response.json()["stack"]
-                click.echo(f"{cyan('Name:', 'bold')} {stack['name']}")
-                click.echo(f"{cyan('Description:', 'bold')} {stack['description']}")
-                click.echo(f"{cyan('Created:', 'bold')} {stack['created']}")
-            continue
-        click.secho("")
-
-        asyncio.run(stream(ctx, id, message, name, verbose=verbose))
+    asyncio.run(
+        chat_loop(
+            ctx,
+            id,
+            name,
+            verbose=verbose,
+            username=username,
+            chat_commands=_chat_commands,
+        )
+    )
 
     click.echo("")
     click.echo(white("Exiting chat...", "bold"))

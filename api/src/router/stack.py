@@ -2,7 +2,7 @@ import logging
 import asyncio
 import uuid
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlmodel import select
 from sqlalchemy.orm import noload, selectinload
@@ -28,6 +28,8 @@ from src.tool.date import DateToolset
 from src.tool.math import MathToolset
 from src.tool.spec import SpecToolset
 from src.tool.message import MessageToolset
+from src.tool.file import FileToolset
+from lib.file import FileRunRegistry, FileRunSession, save_user_file
 
 stack_router = APIRouter(prefix="/stack", dependencies=[Depends(verify_token)])
 logger = logging.getLogger(__name__)
@@ -253,6 +255,16 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
     storage_queue = asyncio.Queue()
 
     _app_loop = asyncio.get_running_loop()
+
+    file_session = FileRunSession(
+        run_id=run_id,
+        stack_id=id,
+        user_id=user_id,
+        queue=main_queue,
+        loop=_app_loop,
+        agent_name=_stack_supervisor.name,
+    )
+    FileRunRegistry.register(file_session)
     _callback = StreamingCallback(
         _stack_supervisor.name,
         main_queue,
@@ -271,6 +283,9 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
     supervisor.add_tool(MathToolset())
     supervisor.add_tool(SpecToolset())
     supervisor.add_tool(MessageToolset(id, app_loop=_app_loop))
+    supervisor.add_tool(
+        FileToolset(user_id, file_session=file_session, app_loop=_app_loop)
+    )
 
     _stack_agents = [agent for agent in _stack.agents if agent.agent_type == AgentType.SUPPORTING]
 
@@ -288,7 +303,13 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
 
         _agent_llm = chat_generator(_llm.provider, _llm.model, _token, _llm.key_id, _llm.region, _llm.max_tokens)
 
-        _agent_tools = [MemoryToolset(user_id, app_loop=_app_loop), DateToolset(), MathToolset(), SpecToolset()]
+        _agent_tools = [
+            MemoryToolset(user_id, app_loop=_app_loop),
+            DateToolset(),
+            MathToolset(),
+            SpecToolset(),
+            FileToolset(user_id, file_session=file_session, app_loop=_app_loop),
+        ]
 
         for toolset in agent.toolsets:
             if toolset.credential_id is not None:
@@ -418,6 +439,7 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
                 f"Stack execution failed: {str(e)}"
             )
         finally:
+            FileRunRegistry.unregister(run_id)
             _callback.end()
             await asyncio.sleep(0)
             await main_queue.put(None)
@@ -435,6 +457,57 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
             "X-Accel-Buffering": "no",
         },
     )
+
+@stack_router.post("/{id}/run/{run_id}/file")
+async def submit_run_file(
+    request: Request,
+    id: int,
+    run_id: str,
+    request_id: str = Form(...),
+    file: UploadFile = File(...),
+) -> dict[str, str]:
+    claims = getattr(request.state, "claims", None)
+    if not claims or "id" not in claims:
+        raise HTTPException(status_code=401, detail="Missing JWT claims on request")
+
+    user_id = claims["id"]
+    file_session = FileRunRegistry.get(run_id)
+    if file_session is None:
+        raise HTTPException(status_code=404, detail="Stack run not found or already finished")
+    if file_session.stack_id != id or file_session.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Stack run not found")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    row = save_user_file(
+        user_id,
+        file.filename or "upload",
+        content,
+        content_type=file.content_type,
+    )
+    resolved = file_session.resolve(
+        request_id,
+        {
+            "file_id": row["id"],
+            "filename": row["filename"],
+            "content_type": row["content_type"],
+            "size": row["size"],
+        },
+    )
+    if not resolved:
+        raise HTTPException(
+            status_code=404,
+            detail="File request not found or already fulfilled",
+        )
+
+    return {
+        "request_id": request_id,
+        "file_id": row["id"],
+        "filename": row["filename"],
+    }
+
 
 @stack_router.delete("/{id}")
 async def delete_stack(request: Request, id: int, session: session_dep) -> dict[str, str]:
