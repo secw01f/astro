@@ -73,16 +73,21 @@ ASTRO:
 
 ## Architecture
 
-```
-  ┌──────────────────┐          HTTP           ┌─────────────────────────────────────────┐
-  │  astro CLI       │  ───────────────────►   │  FastAPI  :8000                         │
-  │  (your machine)  │                         │  (ASTRO API — Docker Compose)           │
-  └──────────────────┘                         │       │                    │            │
-                                               │       │ SQL                │ tool calls │
-                                               │       ▼                    ▼            │
-                                               │  PostgreSQL            Tools service    │
-                                               │  + pgvector            :7001            │
-                                               └─────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph client["Your machine"]
+        CLI["astro CLI"]
+    end
+
+    subgraph compose["Docker Compose"]
+        API["FastAPI :8000\n(ASTRO API)"]
+        DB["PostgreSQL\n+ pgvector"]
+        Tools["Tools service\n:7001"]
+    end
+
+    CLI -->|HTTP| API
+    API -->|SQL| DB
+    API -->|tool calls| Tools
 ```
 
 **Data flow:** CLI talks to the API over HTTP. The API persists state in PostgreSQL (with pgvector) and runs agent tool calls against the tools service.
