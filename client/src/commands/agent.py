@@ -35,6 +35,23 @@ SUPPORTING_ROLES = [
 def _truncate_prompt(text: str, limit: int = 72) -> str:
     return text if len(text) <= limit else f"{text[:limit - 3]}..."
 
+def _is_tty_interactive(interactive: bool) -> bool:
+    return interactive and click.get_text_stream("stdin").isatty()
+
+def _prompt_keep_or_change(label: str, current_display: str, *, interactive: bool) -> bool:
+    """Return True to keep the current value."""
+    if not _is_tty_interactive(interactive):
+        return True
+    choice = select_one(
+        label,
+        [
+            ("keep", f"Keep current - {current_display}"),
+            ("change", "Change"),
+        ],
+        interactive=interactive,
+    )
+    return choice == "keep"
+
 def _return_agent(agent: dict[str, Any]) -> None:
     llm = agent.get("llm")
     llm_line = (
@@ -246,111 +263,149 @@ def update_agent(ctx: click.Context, id: int, name: str | None, description: str
     _return_agent(current_agent)
     click.echo("")
 
+    current_name = current_agent["name"]
+    current_description = current_agent["description"]
+    current_role = current_agent["role"]
+    current_prompt = current_agent.get("system_prompt", "")
+    current_llm = current_agent.get("llm")
+    if isinstance(current_llm, dict):
+        current_llm_id = current_llm["id"]
+        current_llm_display = f"{current_llm['name']} ({current_llm['provider']})"
+    else:
+        current_llm_id = None
+        current_llm_display = "(none)"
+    current_toolsets = current_agent.get("toolsets", [])
+    current_toolset_ids = [toolset["id"] for toolset in current_toolsets]
+    current_toolset_display = (
+        ", ".join(f"{toolset['id']}: {toolset['name']}" for toolset in current_toolsets)
+        or "(none)"
+    )
+
+    updates: dict[str, Any] = {}
+    allowed_roles = (
+        SUPERVISOR_ROLES if current_agent["agent_type"] == "supervisor" else SUPPORTING_ROLES
+    )
+    role_choices = [(value, value.replace("_", " ")) for value in allowed_roles]
+
     click.echo(white("Step 1/5 - Agent details", "normal"))
     click.echo("")
-    if not name:
-        name = click.prompt("Agent name", type=str)
-    if not description:
-        description = click.prompt("Agent description", type=str)
-    if not role:
-        allowed_roles = SUPERVISOR_ROLES if current_agent["agent_type"] == "supervisor" else SUPPORTING_ROLES
-        role_choices = [(value, value.replace("_", " ")) for value in allowed_roles]
-        role = select_one("Select role", role_choices, interactive=interactive)
+    if name is not None:
+        updates["name"] = name
+    elif not _prompt_keep_or_change("Name", current_name, interactive=interactive):
+        updates["name"] = click.prompt("Agent name", type=str, default=current_name)
+
+    if description is not None:
+        updates["description"] = description
+    elif not _prompt_keep_or_change("Description", current_description, interactive=interactive):
+        updates["description"] = click.prompt(
+            "Agent description", type=str, default=current_description
+        )
+
+    if role is not None:
+        if role not in allowed_roles:
+            click.echo(red(f"Role '{role}' does not match type '{current_agent['agent_type']}'.", "bold"))
+            return
+        updates["role"] = role
+    elif not _prompt_keep_or_change(
+        "Role", current_role.replace("_", " "), interactive=interactive
+    ):
+        updates["role"] = select_one("Select role", role_choices, interactive=interactive)
 
     click.echo("")
     click.echo(white("Step 2/5 - System prompt", "normal"))
     click.echo("")
-    current_prompt = current_agent.get("system_prompt", "")
-    if system_prompt is None:
-        keep_existing_prompt = select_one(
-            "Use the prompt already set on this agent?",
-            [
-                ("yes", f"Yes - {_truncate_prompt(current_prompt) if current_prompt else '(empty prompt)'}"),
-                ("no", "No - write a new prompt"),
-            ],
-            interactive=interactive,
+    prompt_display = _truncate_prompt(current_prompt) if current_prompt else "(empty prompt)"
+    if system_prompt is not None:
+        updates["system_prompt"] = system_prompt
+    elif not _prompt_keep_or_change("System prompt", prompt_display, interactive=interactive):
+        updates["system_prompt"] = click.prompt(
+            "System prompt", type=str, default=current_prompt, show_default=bool(current_prompt)
         )
-
-        if keep_existing_prompt == "yes" and current_prompt:
-            system_prompt = current_prompt
-        else:
-            system_prompt = click.prompt("System prompt", type=str, default=current_prompt, show_default=False)
-    click.echo("")
 
     click.echo("")
     click.echo(white("Step 3/5 - LLM selection", "normal"))
     click.echo("")
-    llm_response = client.get("/llm/llms")
-    if llm_response.status_code != 200:
-        click.echo(red("Failed to list LLMs", "bold"))
-        click.echo(white(f"Error: {llm_response.text}", "normal"))
-        return
+    if llm_id is not None:
+        updates["llm"] = llm_id
+    elif not _prompt_keep_or_change("LLM", current_llm_display, interactive=interactive):
+        llm_response = client.get("/llm/llms")
+        if llm_response.status_code != 200:
+            click.echo(red("Failed to list LLMs", "bold"))
+            click.echo(white(f"Error: {llm_response.text}", "normal"))
+            return
 
-    llms = llm_response.json().get("llms", [])
-    if not llms:
-        click.echo(red("No LLMs found. Create one first with `astro llms create`.", "bold"))
-        return
+        llms = llm_response.json().get("llms", [])
+        if not llms:
+            click.echo(red("No LLMs found. Create one first with `astro llms create`.", "bold"))
+            return
 
-    llm_choices = [
-        (llm["id"], f"{llm['name']} ({llm['provider']})")
-        for llm in llms
-    ]
-
-    llm_ids = {item_id for item_id, _ in llm_choices}
-    
-    if llm_id is None:
+        llm_choices = [
+            (llm["id"], f"{llm['name']} ({llm['provider']})")
+            for llm in llms
+        ]
         llm_choice = select_one(
             "Select LLM",
             [(str(item_id), f"{item_id}: {label}") for item_id, label in llm_choices],
             interactive=interactive,
         )
-        llm_id = int(llm_choice)
-    elif llm_id not in llm_ids:
-        click.echo(red(f"LLM ID {llm_id} not found.", "bold"))
-        return
+        updates["llm"] = int(llm_choice)
 
     click.echo("")
     click.echo(white("Step 4/5 - Toolset selection", "normal"))
     click.echo("")
-    selected_toolset_ids = [*toolset_ids]
-    toolset_response = client.get("/tool/toolsets")
-    if toolset_response.status_code == 200 and not selected_toolset_ids:
+    if toolset_ids:
+        updates["toolset_ids"] = list(toolset_ids)
+    elif not _prompt_keep_or_change("Toolsets", current_toolset_display, interactive=interactive):
+        toolset_response = client.get("/tool/toolsets")
+        if toolset_response.status_code != 200:
+            click.echo(red("Failed to list toolsets", "bold"))
+            click.echo(white(f"Error: {toolset_response.text}", "normal"))
+            return
         toolsets = toolset_response.json().get("toolsets", [])
         toolset_choices = [
             (toolset["id"], f"{toolset['name']} ({toolset['type']})")
             for toolset in toolsets
         ]
-        selected_toolset_ids = select_many_ids(
+        updates["toolset_ids"] = select_many_ids(
             "Select toolsets (optional)",
             toolset_choices,
             interactive=interactive,
         )
 
+    if llm_id is not None and "llm" in updates:
+        llm_response = client.get("/llm/llms")
+        if llm_response.status_code == 200:
+            llm_ids = {llm["id"] for llm in llm_response.json().get("llms", [])}
+            if updates["llm"] not in llm_ids:
+                click.echo(red(f"LLM ID {updates['llm']} not found.", "bold"))
+                return
+
+    if not updates:
+        click.echo(white("No changes selected.", "normal"))
+        return
+
+    final_name = updates.get("name", current_name)
+    final_description = updates.get("description", current_description)
+    final_role = updates.get("role", current_role)
+    final_prompt = updates.get("system_prompt", current_prompt)
+    final_llm_id = updates.get("llm", current_llm_id)
+    final_toolset_ids = updates.get("toolset_ids", current_toolset_ids)
+
     click.echo("")
     click.echo(white("Step 5/5 - Review", "normal"))
-    click.echo(f"{green('Name:', 'bold')} {name}")
-    click.echo(f"{green('Description:', 'bold')} {description}")
-    click.echo(f"{green('Role:', 'bold')} {role}")
-    click.echo(f"{green('LLM ID:', 'bold')} {llm_id}")
-    click.echo(f"{green('System Prompt:', 'bold')} {system_prompt}")
-    click.echo(f"{green('Toolset IDs:', 'bold')} {selected_toolset_ids}")
+    click.echo(f"{green('Name:', 'bold')} {final_name}")
+    click.echo(f"{green('Description:', 'bold')} {final_description}")
+    click.echo(f"{green('Role:', 'bold')} {final_role}")
+    click.echo(f"{green('LLM ID:', 'bold')} {final_llm_id}")
+    click.echo(f"{green('System Prompt:', 'bold')} {final_prompt}")
+    click.echo(f"{green('Toolset IDs:', 'bold')} {final_toolset_ids}")
     click.echo("")
 
     if not yes and not click.confirm("Update this agent?", default=True):
         click.echo(white("Cancelled.", "normal"))
-        return 
+        return
 
-    payload = {
-        "name": name,
-        "description": description,
-        "system_prompt": system_prompt,
-        "llm": llm_id,
-        "type": current_agent["agent_type"],
-        "role": role,
-        "toolset_ids": selected_toolset_ids or None,
-    }
-    
-    update_response = client.patch(f"/agent/{id}", json=payload)
+    update_response = client.patch(f"/agent/{id}", json=updates)
     if update_response.status_code != 200:
         click.echo(red("Failed to update agent", "bold"))
         click.echo(white(f"Error: {update_response.text}", "normal"))
