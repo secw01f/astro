@@ -115,6 +115,34 @@ flowchart LR
 
 ---
 
+## Custom toolsets
+
+The bundled `tools/` service ships with the core stack. To publish and host your own tool namespaces outside that deployment, start from the **[astro-toolset-template](https://github.com/secw01f/astro-toolset-template)** repository.
+
+The template follows the same layout as ASTRO’s `tools/` package:
+
+| Path | Description |
+|------|-------------|
+| `tools/api.py` | FastAPI app, JWT middleware, router registration |
+| `tools/src/<namespace>/` | One package per namespace (e.g. `dns`, `web`) |
+| `tools/src/<namespace>/tools.py` | Tool definitions and registry |
+| `tools/src/<namespace>/__init__.py` | `APIRouter` with `GET /tools` and `POST /exec` |
+
+Each namespace is mounted at `http://<host>:7001/<namespace>` and exposes the same list/exec contract agents expect from the bundled tools service.
+
+**Authentication:** External toolsets use **Bearer JWT** (HS256, signed with `JWT_SECRET` on the tool host). Register the toolset in ASTRO with auth required, auth type **bearer**, and the JWT as the credential token. ASTRO sends `Authorization: Bearer <token>` on tool calls. The bundled `astro/tools` service uses internal HMAC signing instead—do not mix the two models on the same host without understanding the difference.
+
+**Typical workflow:**
+
+1. Copy `tools/src/example/` to a new namespace in the template and define tools with the `@tool(...)` decorator.
+2. Wire the router in `tools/api.py` (protected prefix + `include_router`).
+3. Run locally or via Docker Compose (default port **7001**).
+4. Register the toolset URL in ASTRO (CLI or API), e.g. `http://your-host:7001/<namespace>`.
+
+For JWT issuance, namespace setup, and run instructions, see the [template README](https://github.com/secw01f/astro-toolset-template).
+
+---
+
 ## Quick Start
 
 From the repository root:
