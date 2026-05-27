@@ -52,6 +52,8 @@ class CreateAgent(BaseModel):
         if self.type is AgentType.SUPPORTING and self.role not in _SUPPORTING_ROLES:
             allowed = ", ".join(sorted(r.name for r in _SUPPORTING_ROLES))
             raise ValueError(f"Supporting type requires role to be one of: {allowed}")
+        if self.type is AgentType.SUPERVISOR and self.toolset_ids:
+            raise ValueError("Supervisor agents cannot have toolsets; attach toolsets to supporting agents instead.")
         return self
 
 class UpdateAgent(BaseModel):

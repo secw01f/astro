@@ -46,3 +46,11 @@ if docker compose exec -T api sh -c 'test -f /api/stack_user.json'; then
 else
   echo "stack_user.json not found in api container (it may be consumed already)."
 fi
+
+echo ""
+echo "Configure the CLI (URL, login, and permanent account):"
+if [ "$CLI_MODE" = "pipx" ]; then
+  echo "   astro init"
+else
+  echo "   $SCRIPT_DIR/client/.venv/bin/astro init"
+fi
