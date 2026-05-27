@@ -2,7 +2,7 @@ from typing import Any
 
 import click
 
-from lib.color import cyan, green, red, white
+from lib.color import cyan, green, red, white, yellow
 from lib.wizard import select_one, select_many_ids
 
 SUPERVISOR_ROLES = [
@@ -179,28 +179,43 @@ def create(ctx: click.Context, name: str | None, description: str | None, agent_
         return
 
     click.echo("")
-    click.echo(white("Step 4/5 - Prompt and toolsets", "normal"))
+    if agent_type == "supervisor":
+        click.echo(white("Step 4/5 - Prompt", "normal"))
+    else:
+        click.echo(white("Step 4/5 - Prompt and toolsets", "normal"))
     click.echo("")
-    
+
     if not system_prompt and role in ("custom_supervisor", "custom_supporting_agent"):
         system_prompt = click.prompt("System prompt", type=str)
     else:
         system_prompt = None
     click.echo("")
 
-    selected_toolset_ids = [*toolset_ids]
-    toolset_response = client.get("/tool/toolsets")
-    if toolset_response.status_code == 200 and not selected_toolset_ids:
-        toolsets = toolset_response.json().get("toolsets", [])
-        toolset_choices = [
-            (toolset["id"], f"{toolset['name']} ({toolset['type']})")
-            for toolset in toolsets
-        ]
-        selected_toolset_ids = select_many_ids(
-            "Select toolsets (optional)",
-            toolset_choices,
-            interactive=interactive,
-        )
+    selected_toolset_ids: list[int] = []
+    if agent_type == "supervisor":
+        if toolset_ids:
+            click.echo(
+                yellow(
+                    "Ignoring --toolset-id: supervisors do not use toolsets at creation.",
+                    "bold",
+                )
+            )
+    else:
+        selected_toolset_ids = list(toolset_ids)
+        toolset_response = client.get("/tool/toolsets")
+        if toolset_response.status_code == 200 and not selected_toolset_ids:
+            toolsets = toolset_response.json().get("toolsets", [])
+            toolset_choices = [
+                (toolset["id"], f"{toolset['name']} ({toolset['type']})")
+                for toolset in toolsets
+            ]
+            selected_toolset_ids = select_many_ids(
+                "Select toolsets (optional)",
+                toolset_choices,
+                interactive=interactive,
+            )
+        elif toolset_response.status_code != 200 and not selected_toolset_ids:
+            click.echo(yellow("Could not list toolsets; continuing without any.", "bold"))
 
     click.echo("")
     click.echo(white("Step 5/5 - Review", "normal"))
@@ -210,7 +225,10 @@ def create(ctx: click.Context, name: str | None, description: str | None, agent_
     click.echo(f"{green('Role:', 'bold')} {role}")
     click.echo(f"{green('LLM ID:', 'bold')} {llm_id}")
     click.echo(f"{green('System Prompt:', 'bold')} {system_prompt}")
-    click.echo(f"{green('Toolset IDs:', 'bold')} {selected_toolset_ids}")
+    if agent_type == "supervisor":
+        click.echo(f"{green('Toolsets:', 'bold')} (none — supervisors coordinate supporting agents)")
+    else:
+        click.echo(f"{green('Toolset IDs:', 'bold')} {selected_toolset_ids or '(none)'}")
     click.echo("")
 
     if not yes and not click.confirm("Create this agent?", default=True):
@@ -224,7 +242,7 @@ def create(ctx: click.Context, name: str | None, description: str | None, agent_
         "llm": llm_id,
         "type": agent_type,
         "role": role,
-        "toolset_ids": selected_toolset_ids or None,
+        "toolset_ids": selected_toolset_ids if agent_type != "supervisor" else None,
     }
 
     create_response = client.post("/agent/create", json=payload)

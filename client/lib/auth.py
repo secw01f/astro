@@ -1,10 +1,7 @@
-import pathlib
-import json
+from lib.config import ensure_config_file, save_config
+
 
 def persist_token(token: str):
-    _config_file = pathlib.Path.home() / ".astro" / "config.json"
-    with open(_config_file, "r") as f:
-        _config = json.load(f)
-    _config["token"] = token
-    with open(_config_file, "w") as f:
-        json.dump(_config, f, indent=4)
+    config = ensure_config_file()
+    config["token"] = token
+    save_config(config)

@@ -165,9 +165,9 @@ This will:
 ### After startup
 
 - API → http://localhost:8000  
-- CLI → `astro --help`
+- CLI → `astro init` then `astro --help`
 
-> On first run, one time use credentials are output for the default `stack` user. Once logged in the token is only valid for 10 minutes to create a new user with `astro auth create`.
+`./deploy.sh` prints one-time credentials for the default `stack` user. Run `astro init` to set the API URL, log in, create your permanent account, and set your password in one flow.
 
 ---
 
@@ -191,11 +191,26 @@ Update values like:
 
 ### CLI
 
+Interactive setup (recommended on first install):
+
 ```bash
-astro config
+astro init
 ```
 
-Or use environment variables:
+Non-interactive (URL only):
+
+```bash
+astro init --url http://localhost:8000 --skip-login -y
+```
+
+View or change settings later:
+
+```bash
+astro config show
+astro config url http://localhost:8000
+```
+
+Environment variables override the config file:
 
 - `ASTRO_API_URL`
 - `ASTRO_API_TOKEN`
@@ -206,7 +221,8 @@ Or use environment variables:
 
 | Area | Examples |
 |------|----------|
-| Config | `astro config url` |
+| Setup | `astro init` |
+| Config | `astro config show`, `astro config url` |
 | Auth | `astro auth login` |
 | Agents | `astro agent list` |
 | Tools | `astro tool list` |

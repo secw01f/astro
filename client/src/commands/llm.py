@@ -55,8 +55,8 @@ def create(ctx: click.Context, name: str, provider: str, model: str, max_tokens:
         else:
             response = client.post("/llm/new", json={"name": name, "provider": provider, "key": key, "model": model})
     elif provider == "bedrock":
-        key = click.prompt("Access Key", type=str, hide_input=True)
         key_id = click.prompt("Key ID", type=str)
+        key = click.prompt("Access Key", type=str, hide_input=True)
         region = click.prompt("Region", type=str)
         click.echo(
             "For newer Claude models (e.g. anthropic.claude-opus-4-6-v1), use the base model ID; "

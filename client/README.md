@@ -20,6 +20,16 @@ pipx install --editable . --force
 
 On Linux and macOS, ensure `~/.local/bin` is on your `PATH` (pipx’s default). On Windows, pipx usually adds `%USERPROFILE%\.local\bin`; if `astro` is not found, run `pipx ensurepath` and open a new terminal.
 
+## First-time setup
+
+After the API is running (for example via `./deploy.sh` from the repo root):
+
+```bash
+astro init
+```
+
+The wizard saves `~/.astro/config.json`, checks that the API is reachable, logs in with the one-time `stack` credentials from deploy, then walks you through creating a permanent user and setting a password. Use `astro config show` to inspect settings later.
+
 ## Install with pip or pip3 (virtual environment)
 
 On macOS/Homebrew Python, `pip install` / `pip3 install` into the system interpreter is often blocked. Use a venv and **`python -m pip`** (works the same whether you usually type `pip` or `pip3`):
