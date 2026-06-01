@@ -4,11 +4,15 @@ from haystack.tools import Toolset, tool
 from sqlmodel import select
 
 from src.db.db import async_session
-from src.db.models import Message
+from src.db.models import Message, Stack
 from lib.tool import run_sync
 
-async def _get_message_history(stack: int, limit: int = 10) -> list[dict]:
+async def _get_message_history(stack: int, user_id: int, limit: int = 10) -> list[dict]:
     async with async_session() as session:
+        stack_stmt = select(Stack).where(Stack.id == stack, Stack.user_id == user_id)
+        if not (await session.exec(stack_stmt)).first():
+            return []
+
         statement = select(Message).where(Message.stack_id == stack).order_by(Message.created.desc()).limit(limit)
         result = await session.exec(statement)
         messages = result.all()
@@ -23,7 +27,7 @@ async def _get_message_history(stack: int, limit: int = 10) -> list[dict]:
             for message in messages
         ]   
 
-def MessageToolset(stack: int, *, app_loop: asyncio.AbstractEventLoop | None = None) -> Toolset:
+def MessageToolset(stack: int, user_id: int, *, app_loop: asyncio.AbstractEventLoop | None = None) -> Toolset:
     @tool(name="get_message_history")
     def get_message_history(limit: int = 10) -> list[dict]:
         """
@@ -35,6 +39,6 @@ def MessageToolset(stack: int, *, app_loop: asyncio.AbstractEventLoop | None = N
         Returns:
             A list of messages.
         """
-        return run_sync(_get_message_history(stack, limit), app_loop=app_loop)
+        return run_sync(_get_message_history(stack, user_id, limit), app_loop=app_loop)
 
     return Toolset(tools=[get_message_history])

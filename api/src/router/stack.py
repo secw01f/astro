@@ -111,7 +111,7 @@ async def create_stack(request: Request, stack: CreateStack, session: session_de
     if not all_agent_ids:
         raise HTTPException(status_code=400, detail="A supervisor and at least one supporting agent are required")
 
-    statement = select(Agent).where(Agent.id.in_(all_agent_ids))
+    statement = select(Agent).where(Agent.id.in_(all_agent_ids), Agent.user_id == user_id)
     result = await session.exec(statement)
     all_agents = result.all()
     all_by_id = {agent.id: agent for agent in all_agents if agent.id is not None}
@@ -282,7 +282,7 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
     supervisor.add_tool(DateToolset())
     supervisor.add_tool(MathToolset())
     supervisor.add_tool(SpecToolset())
-    supervisor.add_tool(MessageToolset(id, app_loop=_app_loop))
+    supervisor.add_tool(MessageToolset(id, user_id, app_loop=_app_loop))
     supervisor.add_tool(
         FileToolset(user_id, file_session=file_session, app_loop=_app_loop)
     )

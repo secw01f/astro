@@ -1,11 +1,11 @@
 import logging
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request, HTTPException
 from sqlalchemy import func
 from sqlmodel import select
 
 from src.db.db import session_dep
-from src.db.models import Message, MessagePublic
+from src.db.models import Message, MessagePublic, Stack
 from lib.auth.auth import verify_token
 
 from lib.message.models import MessageHistory, MessageHistoryResponse
@@ -14,7 +14,19 @@ message_router = APIRouter(prefix="/message", dependencies=[Depends(verify_token
 logger = logging.getLogger(__name__)
 
 @message_router.post("/history")
-async def get_message_history(body: MessageHistory, session: session_dep) -> MessageHistoryResponse:
+async def get_message_history(request: Request, body: MessageHistory, session: session_dep) -> MessageHistoryResponse:
+    claims = getattr(request.state, "claims", None)
+
+    if not claims or "id" not in claims:
+        raise HTTPException(status_code=401, detail="Missing JWT claims on request")
+
+    user_id = claims["id"]
+
+    stack_stmt = select(Stack).where(Stack.id == body.stack_id, Stack.user_id == user_id)
+    stack = (await session.exec(stack_stmt)).first()
+    if not stack:
+        raise HTTPException(status_code=404, detail="Stack not found")
+
     count_stmt = select(func.count(Message.id)).where(Message.stack_id == body.stack_id)
     if body.last_position is not None:
         count_stmt = count_stmt.where(Message.position >= body.last_position)
