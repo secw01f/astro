@@ -39,6 +39,7 @@ class User(UserBase, table=True):
     credentials: List["Credential"] = Relationship(back_populates="user")
     memories: List["Memory"] = Relationship(back_populates="user")
     llms: List["LLM"] = Relationship(back_populates="user")
+    toolsets: List["ToolSet"] = Relationship(back_populates="user")
 
 class UserPublic(UserBase):
     id: int
@@ -225,15 +226,22 @@ class ToolSet(ToolSetBase, table=True):
     auth_required: bool = Field(default=False)
     auth_type: Optional[AuthType] | None = Field(default=AuthType.BEARER)
     header: Optional[str] | None = Field(default=None)
-    credential_id: Optional[int] | None = Field(default=None, foreign_key="credential.id")
+    user_id: Optional[int] | None = Field(default=None, foreign_key="user.id")
+    user: Optional["User"] = Relationship(back_populates="toolsets")
     type: ToolType
     created: datetime = Field(default_factory=datetime.utcnow)
-    
+
     @model_validator(mode="before")
     def validate_auth_type(self, data: Any) -> Any:
         if self.auth_required and self.auth_type is None:
             raise ValueError("An authentication type is required for an authenticated toolset")
         return data
+
+class UserToolSetCredential(SQLModel, table=True):
+    __tablename__ = "user_toolset_credential"
+    user_id: int = Field(foreign_key="user.id", primary_key=True)
+    toolset_id: int = Field(foreign_key="toolset.id", primary_key=True)
+    credential_id: int = Field(foreign_key="credential.id")
 
 class ToolSetPublic(ToolSetBase):
     id: int
@@ -241,7 +249,31 @@ class ToolSetPublic(ToolSetBase):
     description: str
     type: ToolType
     tools: List["ToolPublic"]
+    scope: str
+    user_id: Optional[int] = None
+    auth_required: bool = False
     created: datetime
+
+    @model_validator(mode="before")
+    @classmethod
+    def _toolset_orm_to_public(cls, data: Any) -> Any:
+        if isinstance(data, ToolSet):
+            return {
+                "id": data.id,
+                "name": data.name,
+                "description": data.description,
+                "url": data.url,
+                "type": data.type,
+                "tools": [ToolPublic.model_validate(t) for t in (data.tools or [])],
+                "scope": "shared" if data.user_id is None else "private",
+                "user_id": data.user_id,
+                "auth_required": data.auth_required,
+                "created": data.created,
+            }
+        if isinstance(data, dict) and "scope" not in data:
+            uid = data.get("user_id")
+            data = {**data, "scope": "shared" if uid is None else "private"}
+        return data
 
 # Credential Models
 class CredentialBase(SQLModel):

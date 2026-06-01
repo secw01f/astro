@@ -7,9 +7,12 @@ from typing import TYPE_CHECKING
 from haystack.tools import Tool, Toolset, ComponentTool, SearchableToolset
 from haystack_integrations.tools.mcp import MCPToolset
 from fastapi import HTTPException
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 if TYPE_CHECKING:
     from src.db.models import ToolSet
+
+from lib.tool.access import user_has_toolset_credential
 
 def toolset(tools: list[Tool | Toolset | ComponentTool | MCPToolset]) -> SearchableToolset:
     catalog = tools
@@ -28,16 +31,22 @@ def run_sync(coro, *, app_loop: asyncio.AbstractEventLoop | None = None):
     with ThreadPoolExecutor(max_workers=1) as executor:
         return executor.submit(asyncio.run, coro).result()
 
-def validate_toolsets_ready_for_agent(toolsets: list[ToolSet]) -> None:
-    unconfigured_auth_toolsets = sorted(
-        toolset.id for toolset in toolsets
-        if toolset.id is not None and toolset.auth_required and toolset.credential_id is None
-    )
+async def validate_toolsets_ready_for_agent(
+    session: AsyncSession,
+    user_id: int,
+    toolsets: list[ToolSet],
+) -> None:
+    unconfigured_auth_toolsets: list[int] = []
+    for toolset in toolsets:
+        if toolset.id is None or not toolset.auth_required:
+            continue
+        if not await user_has_toolset_credential(session, user_id, toolset):
+            unconfigured_auth_toolsets.append(toolset.id)
     if unconfigured_auth_toolsets:
         raise HTTPException(
             status_code=400,
             detail={
-                "message": "One or more toolsets require auth but have no credential configured",
-                "toolset_ids": unconfigured_auth_toolsets,
+                "message": "One or more toolsets require auth but have no credential configured for your user",
+                "toolset_ids": sorted(unconfigured_auth_toolsets),
             },
         )
