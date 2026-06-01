@@ -12,6 +12,7 @@ class CreateMCPToolSet(BaseModel):
     token: Optional[str] = None
     header: Optional[str] = None
     tools: Optional[list[str]] = None
+    shared: Optional[bool] = False
 
 class CreateHttpToolSet(BaseModel):
     name: str
@@ -21,6 +22,10 @@ class CreateHttpToolSet(BaseModel):
     token: Optional[str] = None
     header: Optional[str] = None
     url: str
+    shared: Optional[bool] = False
+
+class SetToolSetCredential(BaseModel):
+    token: str
 
 class ToolDefinition(BaseModel):
     name: str

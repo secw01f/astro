@@ -16,12 +16,21 @@ def list_tools_and_toolsets(ctx: click.Context, toolsets: bool, tools: bool, id:
     if toolsets:
         tools = False
         if id:
-            response = client.get(f"/tool/toolsets/{id}")
+            response = client.get(f"/tool/toolset/{id}")
             if response.status_code != 200:
                 click.echo(f"Failed to get toolset: {response.text}")
                 return
             toolset = response.json()["toolset"]
-            click.echo(f"{magenta("ID:", "bold")} {toolset['id']}\n{magenta("Name:", "bold")} {toolset['name']}\n{magenta("Description:", "bold")} {toolset['description']}\n{magenta("Type:", "bold")} {toolset['type']}\n{magenta("Created:", "bold")} {toolset['created']}")
+            scope = toolset.get("scope", "private")
+            click.echo(
+                f"{magenta('ID:', 'bold')} {toolset['id']}\n"
+                f"{magenta('Name:', 'bold')} {toolset['name']}\n"
+                f"{magenta('Description:', 'bold')} {toolset['description']}\n"
+                f"{magenta('Type:', 'bold')} {toolset['type']}\n"
+                f"{magenta('Scope:', 'bold')} {scope}\n"
+                f"{magenta('Auth required:', 'bold')} {toolset.get('auth_required', False)}\n"
+                f"{magenta('Created:', 'bold')} {toolset['created']}"
+            )
             return
 
         response = client.get("/tool/toolsets")
@@ -30,7 +39,16 @@ def list_tools_and_toolsets(ctx: click.Context, toolsets: bool, tools: bool, id:
             return
         toolsets = response.json()["toolsets"]
         for toolset in toolsets:
-            click.echo(f"{magenta("ID:", "bold")} {toolset['id']}\n{magenta("Name:", "bold")} {toolset['name']}\n{magenta("Description:", "bold")} {toolset['description']}\n{magenta("Type:", "bold")} {toolset['type']}\n{magenta("Created:", "bold")} {toolset['created']}")
+            scope = toolset.get("scope", "private")
+            click.echo(
+                f"{magenta('ID:', 'bold')} {toolset['id']}\n"
+                f"{magenta('Name:', 'bold')} {toolset['name']}\n"
+                f"{magenta('Description:', 'bold')} {toolset['description']}\n"
+                f"{magenta('Type:', 'bold')} {toolset['type']}\n"
+                f"{magenta('Scope:', 'bold')} {scope}\n"
+                f"{magenta('Auth required:', 'bold')} {toolset.get('auth_required', False)}\n"
+                f"{magenta('Created:', 'bold')} {toolset['created']}"
+            )
             click.echo("\n")
         return
     if tools:
@@ -63,6 +81,7 @@ def list_tools_and_toolsets(ctx: click.Context, toolsets: bool, tools: bool, id:
 @click.option("--auth-type", type=click.Choice(["bearer", "header"]), required=False, help="Authentication type when auth is required")
 @click.option("--token", type=click.STRING, required=False, help="Raw token used to create a credential when auth is required")
 @click.option("--header", type=click.STRING, required=False, help="Custom header name (required when --auth-type header)")
+@click.option("--shared", is_flag=True, default=False, help="Create a shared toolset (admin only)")
 def create(
     ctx: click.Context,
     name: str,
@@ -73,16 +92,27 @@ def create(
     auth_type: str | None,
     token: str | None,
     header: str | None,
+    shared: bool,
 ):
     client = ctx.obj["client"]
+
+    if shared and auth_required and token:
+        click.echo(red("Failed to create toolset", "bold"))
+        click.echo(
+            white(
+                "Error: shared toolsets cannot include --token at creation; users set credentials separately",
+                "normal",
+            )
+        )
+        return
 
     if auth_required and not auth_type:
         click.echo(red("Failed to create toolset", "bold"))
         click.echo(white("Error: --auth-type is required when --auth-required is set", "normal"))
         return
-    if auth_required and not token:
+    if auth_required and not token and not shared:
         click.echo(red("Failed to create toolset", "bold"))
-        click.echo(white("Error: --token is required when --auth-required is set", "normal"))
+        click.echo(white("Error: --token is required when --auth-required is set on a private toolset", "normal"))
         return
     if auth_required and auth_type == "header" and not header:
         click.echo(red("Failed to create toolset", "bold"))
@@ -97,6 +127,7 @@ def create(
         "auth_type": auth_type,
         "token": token,
         "header": header,
+        "shared": shared,
     }
 
     if type == "mcp":
@@ -123,6 +154,20 @@ def create(
 
         click.echo(f"{magenta("ID:", "bold")} {toolset['id']}\n{magenta("Name:", "bold")} {toolset['name']}\n{magenta("Description:", "bold")} {toolset['description']}\n{magenta("Type:", "bold")} {toolset['type']}\n{magenta("Created:", "bold")} {toolset['created']}")
         return
+
+@tools.command(name="credential", help="Set your credential for an authenticated toolset")
+@click.pass_context
+@click.argument("id", type=click.INT)
+@click.option("--token", type=click.STRING, required=True, help="Token for this toolset")
+def set_credential(ctx: click.Context, id: int, token: str):
+    client = ctx.obj["client"]
+    response = client.put(f"/tool/toolset/{id}/credential", json={"token": token})
+    if response.status_code != 200:
+        click.echo(red("Failed to set toolset credential", "bold"))
+        click.echo(white(f"Error: {response.text}", "normal"))
+        return
+    click.echo(green("Credential saved for toolset", "bold"))
+
 
 @tools.command(name="delete", help="Delete a toolset")
 @click.pass_context

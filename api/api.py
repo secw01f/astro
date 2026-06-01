@@ -35,7 +35,7 @@ async def startup_event():
     logger.info("Initializing the database")
     await init_db()
     logger.info("Database initialized")
-    
+
     async with async_session() as session:
         user = select(User).where(User.username == "stack")
         result = await session.exec(user)
@@ -557,7 +557,9 @@ async def startup_event():
     else:
         logger.info("Default GitHub Full Access toolset already exists")
 
-    logger.info("Default toolsets ready - Any Toolset that requires authentication will need to have a credential created for it")
+    logger.info(
+        "Default toolsets ready - Users must configure per-user credentials via PUT /tool/toolset/{id}/credential for authenticated toolsets"
+    )
             
     logger.info("Startup Complete")
 

@@ -23,6 +23,7 @@ from lib.credentials import decrypt_token
 from lib.tool.enums import ToolType
 from lib.tool.mcp import MCP, is_valid_server
 from lib.tool.http import http_toolset_factory
+from lib.tool.access import get_user_toolset_token, can_read_toolset
 from src.tool.memory import MemoryToolset
 from src.tool.date import DateToolset
 from src.tool.math import MathToolset
@@ -121,7 +122,7 @@ async def create_stack(request: Request, stack: CreateStack, session: session_de
         raise HTTPException(
             status_code=400,
             detail={
-                "message": "One or more agents do not exist",
+                "message": "One or more agents do not exist or are not owned by you",
                 "agent_ids": missing_ids,
             },
         )
@@ -230,6 +231,16 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
     if not _stack:
         raise HTTPException(status_code=404, detail="Stack not found")
 
+    foreign_agents = [a.id for a in _stack.agents if a.user_id != user_id]
+    if foreign_agents:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "message": "Stack contains agents not owned by you",
+                "agent_ids": foreign_agents,
+            },
+        )
+
     _supervisors = [agent for agent in _stack.agents if agent.agent_type == AgentType.SUPERVISOR]
     if len(_supervisors) == 0:
         raise HTTPException(status_code=400, detail="Stack has no supervisor agent")
@@ -240,10 +251,14 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
     _supervisor_llm = await session.get(LLM, _stack_supervisor.llm_id)
     if _supervisor_llm is None:
         raise HTTPException(status_code=404, detail="Supervisor LLM not found")
+    if _supervisor_llm.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Supervisor LLM is not owned by you")
 
     _credential = await session.get(Credential, _supervisor_llm.credential_id)
     if _credential is None:
         raise HTTPException(status_code=404, detail="Credential not found")
+    if _credential.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Supervisor LLM credential is not owned by you")
     _token = decrypt_token(_credential.token)
 
     supervisor_llm = chat_generator(_supervisor_llm.provider, _supervisor_llm.model, _token, _supervisor_llm.key_id, _supervisor_llm.region, _supervisor_llm.max_tokens)
@@ -295,10 +310,20 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
         _llm = await session.get(LLM, agent.llm_id)
         if _llm is None:
             raise HTTPException(status_code=404, detail=f"LLM {agent.llm_id} for supporting agent {agent.id} not found")
+        if _llm.user_id != user_id:
+            raise HTTPException(
+                status_code=403,
+                detail=f"LLM {_llm.id} for supporting agent {agent.id} is not owned by you",
+            )
 
         _credential = await session.get(Credential, _llm.credential_id)
         if _credential is None:
             raise HTTPException(status_code=404, detail=f"Credential {_llm.credential_id} for LLM {agent.llm_id} not found")
+        if _credential.user_id != user_id:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Credential for LLM {agent.llm_id} is not owned by you",
+            )
         _token = decrypt_token(_credential.token)
 
         _agent_llm = chat_generator(_llm.provider, _llm.model, _token, _llm.key_id, _llm.region, _llm.max_tokens)
@@ -312,18 +337,17 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
         ]
 
         for toolset in agent.toolsets:
-            if toolset.credential_id is not None:
-                _credential = await session.get(Credential, toolset.credential_id)
-                if _credential is None:
-                    raise HTTPException(status_code=404, detail=f"Credential {toolset.credential_id} for toolset {toolset.id} not found")
-                token = decrypt_token(_credential.token)
-            else:
-                token = None
+            if not can_read_toolset(toolset, user_id):
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Toolset {toolset.id} is not accessible to you",
+                )
+            token = await get_user_toolset_token(session, user_id, toolset)
             if toolset.type == ToolType.MCP:
-                if toolset.auth_required and toolset.credential_id is None:
+                if toolset.auth_required and token is None:
                     raise HTTPException(
                         status_code=400,
-                        detail=f"MCP toolset {toolset.id} requires a credential but none is configured",
+                        detail=f"MCP toolset {toolset.id} requires a per-user credential; configure it via PUT /tool/toolset/{toolset.id}/credential",
                     )
                 tools = []
                 auth_required = toolset.auth_required
@@ -362,10 +386,10 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
                         pass
 
             elif toolset.type == ToolType.HTTP:
-                if toolset.auth_required and toolset.credential_id is None:
+                if toolset.auth_required and token is None:
                     raise HTTPException(
                         status_code=400,
-                        detail=f"HTTP toolset {toolset.id} requires a credential but none is configured",
+                        detail=f"HTTP toolset {toolset.id} requires a per-user credential; configure it via PUT /tool/toolset/{toolset.id}/credential",
                     )
                 _http_toolset = http_toolset_factory(toolset, toolset.tools, token=token)
                 _agent_tools.append(_http_toolset)

@@ -11,6 +11,7 @@ from lib.auth.auth import verify_token
 from lib.agent.enums import AgentRole
 from lib.agent.models import CreateAgent, UpdateAgent, UpdatePrompt
 from lib.tool import validate_toolsets_ready_for_agent
+from lib.tool.access import claims_from_request, load_assignable_toolsets
 
 agent_router = APIRouter(prefix="/agent", dependencies=[Depends(verify_token)])
 logger = logging.getLogger(__name__)
@@ -96,18 +97,9 @@ async def update_agent(request: Request, id: int, body: UpdateAgent, session: se
         if not toolset_ids:
             agent.toolsets = []
         else:
-            stmt = select(ToolSet).where(ToolSet.id.in_(toolset_ids))
-            res = await session.exec(stmt)
-            toolsets = res.all()
-            found = {t.id for t in toolsets}
-            missing = set(toolset_ids) - found
-            if missing:
-                raise HTTPException(
-                    status_code=404,
-                    detail={"message": "One or more toolsets do not exist", "toolset_ids": sorted(missing)},
-                )
-            validate_toolsets_ready_for_agent(toolsets)
-            agent.toolsets = list(toolsets)
+            toolsets = await load_assignable_toolsets(session, toolset_ids, user_id)
+            await validate_toolsets_ready_for_agent(session, user_id, toolsets)
+            agent.toolsets = toolsets
 
     session.add(agent)
     await session.flush()
@@ -157,18 +149,9 @@ async def create_agent(request: Request, agent: CreateAgent, session: session_de
 
     ids = agent.toolset_ids or []
     if ids:
-        stmt = select(ToolSet).where(ToolSet.id.in_(ids))
-        res = await session.exec(stmt)
-        toolsets = res.all()
-        found = {t.id for t in toolsets}
-        missing = set(ids) - found
-        if missing:
-            raise HTTPException(
-                status_code=404,
-                detail={"message": "One or more toolsets do not exist", "toolset_ids": sorted(missing)},
-            )
-        validate_toolsets_ready_for_agent(toolsets)
-        new_agent.toolsets = list(toolsets)
+        toolsets = await load_assignable_toolsets(session, ids, user_id)
+        await validate_toolsets_ready_for_agent(session, user_id, toolsets)
+        new_agent.toolsets = toolsets
 
     session.add(new_agent)
     await session.flush()

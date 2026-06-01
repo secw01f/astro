@@ -1,14 +1,15 @@
 import httpx
+
 from pydantic import BaseModel
 from lib.tool import create_tool_registry
 
 Registry, tool = create_tool_registry("appsec")
 REQUEST_TIMEOUT_SECONDS = 30.0
 
+BLACKLISTED_DOMAINS = ["localhost", "127.0.0.1", "169.254.169.254"]
 
 def _error_response(error: str, url: str) -> dict:
     return {"error": error, "url": url}
-
 
 def _format_response(response: httpx.Response) -> dict:
     try:
@@ -42,6 +43,9 @@ class DeleteInput(BaseModel):
 
 @tool(name="get", description="Get from a URL", capabilities=["get"], version="1.0")
 async def get(input: GetInput) -> dict:
+    if any(domain in input.url for domain in BLACKLISTED_DOMAINS):
+        return _error_response("Execution Blocked", input.url)
+
     try:
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
             response = await client.get(input.url)
@@ -53,6 +57,9 @@ async def get(input: GetInput) -> dict:
 
 @tool(name="post", description="Post to a URL", capabilities=["post"], version="1.0")
 async def post(input: PostInput) -> dict:
+    if any(domain in input.url for domain in BLACKLISTED_DOMAINS):
+        return _error_response("Execution Blocked", input.url)
+
     if input.json is not None and input.form is not None:
         return {
             "error": "Provide either json or form (multipart), not both."
@@ -73,6 +80,9 @@ async def post(input: PostInput) -> dict:
 
 @tool(name="put", description="Put to a URL", capabilities=["put"], version="1.0")
 async def put(input: PutInput) -> dict:
+    if any(domain in input.url for domain in BLACKLISTED_DOMAINS):
+        return _error_response("Execution Blocked", input.url)
+
     if input.json is not None and input.form is not None:
         return {
             "error": "Provide either json or form (multipart), not both."
@@ -93,6 +103,9 @@ async def put(input: PutInput) -> dict:
 
 @tool(name="patch", description="Patch to a URL", capabilities=["patch"], version="1.0")
 async def patch(input: PatchInput) -> dict:
+    if any(domain in input.url for domain in BLACKLISTED_DOMAINS):
+        return _error_response("Execution Blocked", input.url)
+
     if input.json is not None and input.form is not None:
         return {
             "error": "Provide either json or form (multipart), not both."
@@ -113,6 +126,9 @@ async def patch(input: PatchInput) -> dict:
 
 @tool(name="delete", description="Delete from a URL", capabilities=["delete"], version="1.0")
 async def delete(input: DeleteInput) -> dict:
+    if any(domain in input.url for domain in BLACKLISTED_DOMAINS):
+        return _error_response("Execution Blocked", input.url)
+
     try:
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
             response = await client.delete(input.url)
