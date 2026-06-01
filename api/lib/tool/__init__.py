@@ -12,8 +12,6 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 if TYPE_CHECKING:
     from src.db.models import ToolSet
 
-from lib.tool.access import user_has_toolset_credential
-
 def toolset(tools: list[Tool | Toolset | ComponentTool | MCPToolset]) -> SearchableToolset:
     catalog = tools
     return SearchableToolset(catalog=catalog)
@@ -36,6 +34,8 @@ async def validate_toolsets_ready_for_agent(
     user_id: int,
     toolsets: list[ToolSet],
 ) -> None:
+    from lib.tool.access import user_has_toolset_credential
+
     unconfigured_auth_toolsets: list[int] = []
     for toolset in toolsets:
         if toolset.id is None or not toolset.auth_required:
