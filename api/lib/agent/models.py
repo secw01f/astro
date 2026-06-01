@@ -43,6 +43,7 @@ class CreateAgent(BaseModel):
     type: AgentType
     role: AgentRole
     toolset_ids: Optional[list[int]] = None
+    tool_ids: Optional[list[int]] = None
 
     @model_validator(mode="after")
     def validate_type_and_role(self) -> Self:
@@ -54,6 +55,8 @@ class CreateAgent(BaseModel):
             raise ValueError(f"Supporting type requires role to be one of: {allowed}")
         if self.type is AgentType.SUPERVISOR and self.toolset_ids:
             raise ValueError("Supervisor agents cannot have toolsets; attach toolsets to supporting agents instead.")
+        if self.type is AgentType.SUPERVISOR and self.tool_ids:
+            raise ValueError("Supervisor agents cannot have tools; attach tools to supporting agents instead.")
         return self
 
 class UpdateAgent(BaseModel):
@@ -64,6 +67,7 @@ class UpdateAgent(BaseModel):
     type: Optional[AgentType] = None
     role: Optional[AgentRole] = None
     toolset_ids: Optional[list[int]] = None
+    tool_ids: Optional[list[int]] = None
 
 class UpdatePrompt(BaseModel):
     prompt: str

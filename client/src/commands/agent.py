@@ -3,6 +3,16 @@ from typing import Any
 import click
 
 from lib.color import cyan, green, red, white, yellow
+from lib.stack import format_stacks
+from lib.tools import (
+    format_additional_tools,
+    format_effective_tools,
+    format_toolsets,
+    prune_redundant_tool_ids,
+    tool_choices_from_toolsets,
+    tool_ids_from_toolsets,
+    build_agent_tooling_preview,
+)
 from lib.wizard import select_one, select_many_ids
 
 SUPERVISOR_ROLES = [
@@ -66,8 +76,10 @@ def _return_agent(agent: dict[str, Any]) -> None:
         f"{cyan('LLM:', 'bold')} {llm_line}\n"
         f"{cyan('Role:', 'bold')} {agent['role']}\n"
         f"{cyan('System Prompt:', 'bold')} {agent['system_prompt']}\n"
-        f"{cyan('Stacks:', 'bold')} {agent['stacks']}\n"
-        f"{cyan('Toolsets:', 'bold')} {agent['toolsets']}\n"
+        f"{cyan('Stacks:', 'bold')} {format_stacks(agent.get('stacks') or [])}\n"
+        f"{cyan('Toolsets:', 'bold')} {format_toolsets(agent.get('toolsets') or [])}\n"
+        f"{cyan('Additional tools:', 'bold')} {format_additional_tools(agent)}\n"
+        f"{cyan('Effective tools:', 'bold')} {format_effective_tools(agent)}\n"
         f"{cyan('Created:', 'bold')} {agent['created']}"
     )
 
@@ -117,9 +129,10 @@ def get_agent_by_id(ctx: click.Context, id: int):
 @click.option("--system-prompt", type=click.STRING, required=False, help="System prompt for the agent")
 @click.option("--llm-id", type=click.INT, required=False, help="LLM ID to use")
 @click.option("--toolset-id", "toolset_ids", type=click.INT, multiple=True, help="Toolset ID to attach (repeatable)")
+@click.option("--tool-id", "tool_ids", type=click.INT, multiple=True, help="Tool ID to attach (repeatable)")
 @click.option("--interactive/--no-interactive", default=True, help="Use interactive selection prompts")
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt")
-def create(ctx: click.Context, name: str | None, description: str | None, agent_type: str | None, role: str | None, system_prompt: str | None, llm_id: int | None, toolset_ids: tuple[int, ...], interactive: bool, yes: bool):
+def create(ctx: click.Context, name: str | None, description: str | None, agent_type: str | None, role: str | None, system_prompt: str | None, llm_id: int | None, toolset_ids: tuple[int, ...], tool_ids: tuple[int, ...], interactive: bool, yes: bool):
     client = ctx.obj["client"]
 
     click.echo(green("Agent creation wizard", "bold"))
@@ -192,6 +205,8 @@ def create(ctx: click.Context, name: str | None, description: str | None, agent_
     click.echo("")
 
     selected_toolset_ids: list[int] = []
+    selected_tool_ids: list[int] = []
+    catalog_toolsets: list[dict[str, Any]] = []
     if agent_type == "supervisor":
         if toolset_ids:
             click.echo(
@@ -200,22 +215,64 @@ def create(ctx: click.Context, name: str | None, description: str | None, agent_
                     "bold",
                 )
             )
+        if tool_ids:
+            click.echo(
+                yellow(
+                    "Ignoring --tool-id: supervisors do not use tools at creation.",
+                    "bold",
+                )
+            )
     else:
         selected_toolset_ids = list(toolset_ids)
+        selected_tool_ids = list(tool_ids)
         toolset_response = client.get("/tool/toolsets")
-        if toolset_response.status_code == 200 and not selected_toolset_ids:
-            toolsets = toolset_response.json().get("toolsets", [])
-            toolset_choices = [
-                (toolset["id"], f"{toolset['name']} ({toolset['type']})")
-                for toolset in toolsets
-            ]
-            selected_toolset_ids = select_many_ids(
-                "Select toolsets (optional)",
-                toolset_choices,
-                interactive=interactive,
-            )
-        elif toolset_response.status_code != 200 and not selected_toolset_ids:
+        if toolset_response.status_code == 200:
+            catalog_toolsets = toolset_response.json().get("toolsets", [])
+            if not selected_toolset_ids:
+                toolset_choices = [
+                    (toolset["id"], f"{toolset['name']} ({toolset['type']}, {len(toolset.get('tools', []))} tools)")
+                    for toolset in catalog_toolsets
+                ]
+                selected_toolset_ids = select_many_ids(
+                    "Select toolsets (optional)",
+                    toolset_choices,
+                    interactive=interactive,
+                )
+            if not selected_tool_ids:
+                covered = tool_ids_from_toolsets(catalog_toolsets, selected_toolset_ids)
+                tool_choices = tool_choices_from_toolsets(
+                    catalog_toolsets,
+                    exclude_ids=covered,
+                )
+                if covered:
+                    click.echo(
+                        white(
+                            f"{len(covered)} tool(s) already included via selected toolsets; omitted from picker.",
+                            "normal",
+                        )
+                    )
+                if tool_choices:
+                    selected_tool_ids = select_many_ids(
+                        "Select additional tools (optional)",
+                        tool_choices,
+                        interactive=interactive,
+                    )
+        elif not selected_toolset_ids and not selected_tool_ids:
             click.echo(yellow("Could not list toolsets; continuing without any.", "bold"))
+
+    if catalog_toolsets and selected_toolset_ids and selected_tool_ids:
+        selected_tool_ids, removed = prune_redundant_tool_ids(
+            catalog_toolsets,
+            selected_toolset_ids,
+            selected_tool_ids,
+        )
+        if removed:
+            click.echo(
+                yellow(
+                    f"Ignoring redundant tool ID(s) already covered by selected toolsets: {removed}",
+                    "bold",
+                )
+            )
 
     click.echo("")
     click.echo(white("Step 5/5 - Review", "normal"))
@@ -228,7 +285,14 @@ def create(ctx: click.Context, name: str | None, description: str | None, agent_
     if agent_type == "supervisor":
         click.echo(f"{green('Toolsets:', 'bold')} (none — supervisors coordinate supporting agents)")
     else:
-        click.echo(f"{green('Toolset IDs:', 'bold')} {selected_toolset_ids or '(none)'}")
+        preview = build_agent_tooling_preview(
+            catalog_toolsets,
+            selected_toolset_ids,
+            selected_tool_ids,
+        )
+        click.echo(f"{green('Toolsets:', 'bold')} {format_toolsets(preview['toolsets'])}")
+        click.echo(f"{green('Additional tools:', 'bold')} {format_additional_tools(preview)}")
+        click.echo(f"{green('Effective tools:', 'bold')} {format_effective_tools(preview)}")
     click.echo("")
 
     if not yes and not click.confirm("Create this agent?", default=True):
@@ -243,6 +307,7 @@ def create(ctx: click.Context, name: str | None, description: str | None, agent_
         "type": agent_type,
         "role": role,
         "toolset_ids": selected_toolset_ids if agent_type != "supervisor" else None,
+        "tool_ids": selected_tool_ids if agent_type != "supervisor" else None,
     }
 
     create_response = client.post("/agent/create", json=payload)
@@ -263,9 +328,10 @@ def create(ctx: click.Context, name: str | None, description: str | None, agent_
 @click.option("--system-prompt", type=click.STRING, required=False, help="System prompt for the agent")
 @click.option("--llm-id", type=click.INT, required=False, help="LLM ID to use")
 @click.option("--toolset-id", "toolset_ids", type=click.INT, multiple=True, help="Toolset ID to attach (repeatable)")
+@click.option("--tool-id", "tool_ids", type=click.INT, multiple=True, help="Tool ID to attach (repeatable)")
 @click.option("--interactive/--no-interactive", default=True, help="Use interactive selection prompts")
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt")
-def update_agent(ctx: click.Context, id: int, name: str | None, description: str | None, role: str | None, system_prompt: str | None, llm_id: int | None, toolset_ids: tuple[int, ...], interactive: bool, yes: bool):
+def update_agent(ctx: click.Context, id: int, name: str | None, description: str | None, role: str | None, system_prompt: str | None, llm_id: int | None, toolset_ids: tuple[int, ...], tool_ids: tuple[int, ...], interactive: bool, yes: bool):
     client = ctx.obj["client"]
 
     click.echo(green("Agent update wizard", "bold"))
@@ -292,12 +358,10 @@ def update_agent(ctx: click.Context, id: int, name: str | None, description: str
     else:
         current_llm_id = None
         current_llm_display = "(none)"
-    current_toolsets = current_agent.get("toolsets", [])
+    current_toolsets = current_agent.get("toolsets") or []
     current_toolset_ids = [toolset["id"] for toolset in current_toolsets]
-    current_toolset_display = (
-        ", ".join(f"{toolset['id']}: {toolset['name']}" for toolset in current_toolsets)
-        or "(none)"
-    )
+    current_toolset_display = format_toolsets(current_toolsets)
+    current_tool_display = format_additional_tools(current_agent)
 
     updates: dict[str, Any] = {}
     allowed_roles = (
@@ -369,26 +433,74 @@ def update_agent(ctx: click.Context, id: int, name: str | None, description: str
         updates["llm"] = int(llm_choice)
 
     click.echo("")
-    click.echo(white("Step 4/5 - Toolset selection", "normal"))
+    click.echo(white("Step 4/5 - Toolset and tool selection", "normal"))
     click.echo("")
+    catalog_toolsets: list[dict[str, Any]] = []
+    toolset_response = client.get("/tool/toolsets")
+    if toolset_response.status_code == 200:
+        catalog_toolsets = toolset_response.json().get("toolsets", [])
+
     if toolset_ids:
         updates["toolset_ids"] = list(toolset_ids)
     elif not _prompt_keep_or_change("Toolsets", current_toolset_display, interactive=interactive):
-        toolset_response = client.get("/tool/toolsets")
-        if toolset_response.status_code != 200:
+        if not catalog_toolsets:
             click.echo(red("Failed to list toolsets", "bold"))
             click.echo(white(f"Error: {toolset_response.text}", "normal"))
             return
-        toolsets = toolset_response.json().get("toolsets", [])
         toolset_choices = [
-            (toolset["id"], f"{toolset['name']} ({toolset['type']})")
-            for toolset in toolsets
+            (toolset["id"], f"{toolset['name']} ({toolset['type']}, {len(toolset.get('tools', []))} tools)")
+            for toolset in catalog_toolsets
         ]
         updates["toolset_ids"] = select_many_ids(
             "Select toolsets (optional)",
             toolset_choices,
             interactive=interactive,
         )
+
+    resolved_toolset_ids = updates.get("toolset_ids", current_toolset_ids)
+
+    if tool_ids:
+        updates["tool_ids"] = list(tool_ids)
+    elif not _prompt_keep_or_change("Additional tools", current_tool_display, interactive=interactive):
+        if not catalog_toolsets:
+            click.echo(red("Failed to list tools", "bold"))
+            click.echo(white(f"Error: {toolset_response.text}", "normal"))
+            return
+        covered = tool_ids_from_toolsets(catalog_toolsets, resolved_toolset_ids)
+        tool_choices = tool_choices_from_toolsets(
+            catalog_toolsets,
+            exclude_ids=covered,
+        )
+        if covered:
+            click.echo(
+                white(
+                    f"{len(covered)} tool(s) already included via selected toolsets; omitted from picker.",
+                    "normal",
+                )
+            )
+        if not tool_choices:
+            click.echo(yellow("No additional tools available to select.", "bold"))
+        else:
+            updates["tool_ids"] = select_many_ids(
+                "Select additional tools (optional)",
+                tool_choices,
+                interactive=interactive,
+            )
+
+    if catalog_toolsets and "tool_ids" in updates:
+        pruned, removed = prune_redundant_tool_ids(
+            catalog_toolsets,
+            updates.get("toolset_ids", current_toolset_ids),
+            updates["tool_ids"],
+        )
+        if removed:
+            click.echo(
+                yellow(
+                    f"Ignoring redundant tool ID(s) already covered by selected toolsets: {removed}",
+                    "bold",
+                )
+            )
+        updates["tool_ids"] = pruned
 
     if llm_id is not None and "llm" in updates:
         llm_response = client.get("/llm/llms")
@@ -408,6 +520,10 @@ def update_agent(ctx: click.Context, id: int, name: str | None, description: str
     final_prompt = updates.get("system_prompt", current_prompt)
     final_llm_id = updates.get("llm", current_llm_id)
     final_toolset_ids = updates.get("toolset_ids", current_toolset_ids)
+    if "tool_ids" in updates:
+        final_tool_ids = updates["tool_ids"]
+    else:
+        final_tool_ids = [tool["id"] for tool in current_agent.get("tools") or []]
 
     click.echo("")
     click.echo(white("Step 5/5 - Review", "normal"))
@@ -416,8 +532,14 @@ def update_agent(ctx: click.Context, id: int, name: str | None, description: str
     click.echo(f"{green('Role:', 'bold')} {final_role}")
     click.echo(f"{green('LLM ID:', 'bold')} {final_llm_id}")
     click.echo(f"{green('System Prompt:', 'bold')} {final_prompt}")
-    click.echo(f"{green('Toolset IDs:', 'bold')} {final_toolset_ids}")
-    click.echo("")
+    if catalog_toolsets:
+        preview = build_agent_tooling_preview(catalog_toolsets, final_toolset_ids, final_tool_ids)
+        click.echo(f"{green('Toolsets:', 'bold')} {format_toolsets(preview['toolsets'])}")
+        click.echo(f"{green('Additional tools:', 'bold')} {format_additional_tools(preview)}")
+        click.echo(f"{green('Effective tools:', 'bold')} {format_effective_tools(preview)}")
+    else:
+        click.echo(f"{green('Toolset IDs:', 'bold')} {final_toolset_ids}")
+        click.echo(f"{green('Tool IDs:', 'bold')} {final_tool_ids}")
 
     if not yes and not click.confirm("Update this agent?", default=True):
         click.echo(white("Cancelled.", "normal"))

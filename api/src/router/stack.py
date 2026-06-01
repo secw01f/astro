@@ -10,7 +10,7 @@ from typing import Annotated
 from haystack.dataclasses import ChatMessage, ChatRole
 
 from src.db.db import async_session, session_dep
-from src.db.models import LLM, Agent, Stack, StackPublic, Message, ToolSet, AgentStackLink, Credential
+from src.db.models import LLM, Agent, Stack, StackPublic, Message, Tool, ToolSet, AgentStackLink, Credential
 from lib.auth.auth import verify_token
 
 from lib.agent import SupervisorAgent, SupportingAgent, StreamingCallback
@@ -20,10 +20,7 @@ from lib.agent.enums import AgentType
 from lib.agent.prompts import create_prompt
 from lib.llm import chat_generator
 from lib.credentials import decrypt_token
-from lib.tool.enums import ToolType
-from lib.tool.mcp import MCP, is_valid_server
-from lib.tool.http import http_toolset_factory
-from lib.tool.access import get_user_toolset_token, can_read_toolset
+from lib.tool.resolver import build_agent_toolset_catalog
 from src.tool.memory import MemoryToolset
 from src.tool.date import DateToolset
 from src.tool.math import MathToolset
@@ -50,9 +47,13 @@ async def get_all_stacks(request: Request, session: session_dep) -> dict[str, li
             selectinload(Stack.agents).options(
                 selectinload(Agent.llm),
                 selectinload(Agent.toolsets).selectinload(ToolSet.tools),
+                selectinload(Agent.toolsets).selectinload(ToolSet.member_tools).selectinload(Tool.toolset),
+                selectinload(Agent.tools).selectinload(Tool.toolset),
                 selectinload(Agent.stacks).selectinload(Stack.agents).options(
                     selectinload(Agent.llm),
                     selectinload(Agent.toolsets).selectinload(ToolSet.tools),
+                selectinload(Agent.toolsets).selectinload(ToolSet.member_tools).selectinload(Tool.toolset),
+                selectinload(Agent.tools).selectinload(Tool.toolset),
                     noload(Agent.stacks),
                 ),
             ),
@@ -79,9 +80,13 @@ async def get_stack_by_id(request: Request, id: int, session: session_dep) -> di
             selectinload(Stack.agents).options(
                 selectinload(Agent.llm),
                 selectinload(Agent.toolsets).selectinload(ToolSet.tools),
+                selectinload(Agent.toolsets).selectinload(ToolSet.member_tools).selectinload(Tool.toolset),
+                selectinload(Agent.tools).selectinload(Tool.toolset),
                 selectinload(Agent.stacks).selectinload(Stack.agents).options(
                     selectinload(Agent.llm),
                     selectinload(Agent.toolsets).selectinload(ToolSet.tools),
+                selectinload(Agent.toolsets).selectinload(ToolSet.member_tools).selectinload(Tool.toolset),
+                selectinload(Agent.tools).selectinload(Tool.toolset),
                     noload(Agent.stacks),
                 ),
             ),
@@ -153,9 +158,13 @@ async def create_stack(request: Request, stack: CreateStack, session: session_de
             selectinload(Stack.agents).options(
                 selectinload(Agent.llm),
                 selectinload(Agent.toolsets).selectinload(ToolSet.tools),
+                selectinload(Agent.toolsets).selectinload(ToolSet.member_tools).selectinload(Tool.toolset),
+                selectinload(Agent.tools).selectinload(Tool.toolset),
                 selectinload(Agent.stacks).selectinload(Stack.agents).options(
                     selectinload(Agent.llm),
                     selectinload(Agent.toolsets).selectinload(ToolSet.tools),
+                selectinload(Agent.toolsets).selectinload(ToolSet.member_tools).selectinload(Tool.toolset),
+                selectinload(Agent.tools).selectinload(Tool.toolset),
                     noload(Agent.stacks),
                 ),
             ),
@@ -192,9 +201,13 @@ async def update_stack(request: Request, id: int, stack: Annotated[UpdateStack, 
             selectinload(Stack.agents).options(
                 selectinload(Agent.llm),
                 selectinload(Agent.toolsets).selectinload(ToolSet.tools),
+                selectinload(Agent.toolsets).selectinload(ToolSet.member_tools).selectinload(Tool.toolset),
+                selectinload(Agent.tools).selectinload(Tool.toolset),
                 selectinload(Agent.stacks).selectinload(Stack.agents).options(
                     selectinload(Agent.llm),
                     selectinload(Agent.toolsets).selectinload(ToolSet.tools),
+                selectinload(Agent.toolsets).selectinload(ToolSet.member_tools).selectinload(Tool.toolset),
+                selectinload(Agent.tools).selectinload(Tool.toolset),
                     noload(Agent.stacks),
                 ),
             ),
@@ -221,7 +234,14 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
         .options(
             selectinload(Stack.agents)
             .selectinload(Agent.toolsets)
-            .selectinload(ToolSet.tools)
+            .selectinload(ToolSet.tools),
+            selectinload(Stack.agents)
+            .selectinload(Agent.toolsets)
+            .selectinload(ToolSet.member_tools)
+            .selectinload(Tool.toolset),
+            selectinload(Stack.agents)
+            .selectinload(Agent.tools)
+            .selectinload(Tool.toolset),
         )
         .where(Stack.id == id, Stack.user_id == user_id)
     )
@@ -336,63 +356,9 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
             FileToolset(user_id, file_session=file_session, app_loop=_app_loop),
         ]
 
-        for toolset in agent.toolsets:
-            if not can_read_toolset(toolset, user_id):
-                raise HTTPException(
-                    status_code=403,
-                    detail=f"Toolset {toolset.id} is not accessible to you",
-                )
-            token = await get_user_toolset_token(session, user_id, toolset)
-            if toolset.type == ToolType.MCP:
-                if toolset.auth_required and token is None:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"MCP toolset {toolset.id} requires a per-user credential; configure it via PUT /tool/toolset/{toolset.id}/credential",
-                    )
-                tools = []
-                auth_required = toolset.auth_required
-                auth_type = toolset.auth_type
-                header = toolset.header
-                if toolset.tools != None:
-                    for tool in toolset.tools:
-                        tools.append(tool.name)
-                if len(tools) != 0:
-                    try:
-                        if is_valid_server(toolset.url, auth_required, auth_type, token, header):
-                            _agent_tools.append(MCP(toolset.url, tools, auth_required, auth_type, token, header))
-                        else:
-                            logger.error(f"Invalid MCP server: {toolset.url}")
-                            pass
-                    except Exception as e:
-                        logger.error(f"Error adding MCP toolset {toolset.url}: {e}")
-                        pass
-                else:
-                    try:
-                        if is_valid_server(toolset.url, auth_required, auth_type, token, header):
-                            _agent_tools.append(
-                                MCP(
-                                    toolset.url,
-                                    auth_required=auth_required,
-                                    auth_type=auth_type,
-                                    token=token,
-                                    header=header,
-                                )
-                            )
-                        else:
-                            logger.error(f"Invalid MCP server: {toolset.url}")
-                            pass
-                    except Exception as e:
-                        logger.error(f"Error adding MCP toolset {toolset.url}: {e}")
-                        pass
-
-            elif toolset.type == ToolType.HTTP:
-                if toolset.auth_required and token is None:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"HTTP toolset {toolset.id} requires a per-user credential; configure it via PUT /tool/toolset/{toolset.id}/credential",
-                    )
-                _http_toolset = http_toolset_factory(toolset, toolset.tools, token=token)
-                _agent_tools.append(_http_toolset)
+        _agent_tools.extend(
+            await build_agent_toolset_catalog(session, agent, user_id)
+        )
 
         _support_stream = StreamingCallback(
             agent.name,

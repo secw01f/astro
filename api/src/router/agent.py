@@ -5,16 +5,28 @@ from sqlalchemy.orm import selectinload
 from sqlmodel import select
 
 from src.db.db import session_dep
-from src.db.models import Agent, AgentPublic, ToolSet, Prompt
+from src.db.models import Agent, AgentPublic, Prompt, Tool
 from lib.auth.auth import verify_token
 
 from lib.agent.enums import AgentRole
 from lib.agent.models import CreateAgent, UpdateAgent, UpdatePrompt
-from lib.tool import validate_toolsets_ready_for_agent
-from lib.tool.access import claims_from_request, load_assignable_toolsets
+from lib.tool import validate_toolsets_ready_for_agent, validate_tools_ready_for_agent
+from lib.tool.access import (
+    claims_from_request,
+    load_assignable_toolsets,
+    load_assignable_tools,
+    _TOOLSET_LOAD_OPTIONS,
+)
 
 agent_router = APIRouter(prefix="/agent", dependencies=[Depends(verify_token)])
 logger = logging.getLogger(__name__)
+
+_AGENT_LOAD_OPTIONS = (
+    selectinload(Agent.stacks),
+    selectinload(Agent.toolsets).options(*_TOOLSET_LOAD_OPTIONS),
+    selectinload(Agent.tools).selectinload(Tool.toolset),
+    selectinload(Agent.llm),
+)
 
 @agent_router.get("/agents")
 async def get_all_agents(request: Request, session: session_dep) -> dict[str, list[AgentPublic]]:
@@ -28,11 +40,7 @@ async def get_all_agents(request: Request, session: session_dep) -> dict[str, li
     statement = (
         select(Agent)
         .where(Agent.user_id == user_id)
-        .options(
-            selectinload(Agent.stacks),
-            selectinload(Agent.toolsets),
-            selectinload(Agent.llm),
-        )
+        .options(*_AGENT_LOAD_OPTIONS)
     )
     result = await session.exec(statement)
     agents = result.all()
@@ -50,11 +58,7 @@ async def get_agent_by_id(request: Request, id: int, session: session_dep) -> di
     statement = (
         select(Agent)
         .where(Agent.user_id == user_id, Agent.id == id)
-        .options(
-            selectinload(Agent.stacks),
-            selectinload(Agent.toolsets),
-            selectinload(Agent.llm)
-        )
+        .options(*_AGENT_LOAD_OPTIONS)
     )
     result = await session.exec(statement)
     agent = result.first()
@@ -76,7 +80,7 @@ async def update_agent(request: Request, id: int, body: UpdateAgent, session: se
     statement = (
         select(Agent)
         .where(Agent.user_id == user_id, Agent.id == id)
-        .options(selectinload(Agent.toolsets))
+        .options(selectinload(Agent.toolsets).options(*_TOOLSET_LOAD_OPTIONS), selectinload(Agent.tools))
     )
     result = await session.exec(statement)
     agent = result.first()
@@ -90,6 +94,7 @@ async def update_agent(request: Request, id: int, body: UpdateAgent, session: se
     if "llm" in updates:
         agent.llm_id = updates.pop("llm")
     toolset_ids = updates.pop("toolset_ids", None)
+    tool_ids = updates.pop("tool_ids", None)
     for key, value in updates.items():
         setattr(agent, key, value)
 
@@ -101,6 +106,14 @@ async def update_agent(request: Request, id: int, body: UpdateAgent, session: se
             await validate_toolsets_ready_for_agent(session, user_id, toolsets)
             agent.toolsets = toolsets
 
+    if tool_ids is not None:
+        if not tool_ids:
+            agent.tools = []
+        else:
+            tools = await load_assignable_tools(session, tool_ids, user_id)
+            await validate_tools_ready_for_agent(session, user_id, tools)
+            agent.tools = tools
+
     session.add(agent)
     await session.flush()
     await session.commit()
@@ -108,11 +121,7 @@ async def update_agent(request: Request, id: int, body: UpdateAgent, session: se
     loaded_stmt = (
         select(Agent)
         .where(Agent.id == agent.id)
-        .options(
-            selectinload(Agent.stacks),
-            selectinload(Agent.toolsets),
-            selectinload(Agent.llm),
-        )
+        .options(*_AGENT_LOAD_OPTIONS)
     )
     loaded = (await session.exec(loaded_stmt)).one()
     return {"agent": AgentPublic.model_validate(loaded)}
@@ -153,6 +162,12 @@ async def create_agent(request: Request, agent: CreateAgent, session: session_de
         await validate_toolsets_ready_for_agent(session, user_id, toolsets)
         new_agent.toolsets = toolsets
 
+    tool_ids = agent.tool_ids or []
+    if tool_ids:
+        tools = await load_assignable_tools(session, tool_ids, user_id)
+        await validate_tools_ready_for_agent(session, user_id, tools)
+        new_agent.tools = tools
+
     session.add(new_agent)
     await session.flush()
     await session.commit()
@@ -160,11 +175,7 @@ async def create_agent(request: Request, agent: CreateAgent, session: session_de
     loaded_stmt = (
         select(Agent)
         .where(Agent.id == new_agent.id)
-        .options(
-            selectinload(Agent.stacks),
-            selectinload(Agent.toolsets),
-            selectinload(Agent.llm)
-        )
+        .options(*_AGENT_LOAD_OPTIONS)
     )
     loaded = (await session.exec(loaded_stmt)).one()
     return {"agent": AgentPublic.model_validate(loaded)}

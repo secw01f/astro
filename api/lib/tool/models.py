@@ -14,6 +14,12 @@ class CreateMCPToolSet(BaseModel):
     tools: Optional[list[str]] = None
     shared: Optional[bool] = False
 
+class CreateLogicalToolSet(BaseModel):
+    name: str
+    description: str
+    tool_ids: list[int]
+    shared: Optional[bool] = False
+
 class CreateHttpToolSet(BaseModel):
     name: str
     description: str
@@ -23,6 +29,17 @@ class CreateHttpToolSet(BaseModel):
     header: Optional[str] = None
     url: str
     shared: Optional[bool] = False
+
+class UpdateToolSet(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    url: Optional[str] = None
+    auth_required: Optional[bool] = None
+    auth_type: Optional[AuthType] = None
+    header: Optional[str] = None
+    sync_tools: Optional[bool] = None
+    tools: Optional[list[str]] = None
+    tool_ids: Optional[list[int]] = None
 
 class SetToolSetCredential(BaseModel):
     token: str

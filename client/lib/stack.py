@@ -7,6 +7,20 @@ import httpx
 
 from lib.color import cyan, green, magenta, red, white, yellow
 
+def format_stacks(stacks: list[dict]) -> str:
+    if not stacks:
+        return "(none)"
+    parts: list[str] = []
+    for stack in stacks:
+        stack_id = stack.get("id", "?")
+        name = stack.get("name", "?")
+        description = stack.get("description", "")
+        if description:
+            parts.append(f"{stack_id}: {name} ({description})")
+        else:
+            parts.append(f"{stack_id}: {name}")
+    return ", ".join(parts)
+
 def get_agents_by_type(ctx: click.Context) -> tuple[list[dict], list[dict]] | tuple[None, None]:
     client = ctx.obj["client"]
     response = client.get("/agent/agents")

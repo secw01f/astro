@@ -24,13 +24,19 @@ def _resolver(nameservers: list[str] | None, lifetime: float) -> dns.resolver.Re
 
 def _answer_to_records(answer: dns.resolver.Answer) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
-    for rr in answer:
+    rrset = answer.rrset
+    if rrset is None:
+        return out
+    name = answer.qname.to_text(omit_final_dot=True)
+    ttl = rrset.ttl
+    rdtype = dns.rdatatype.to_text(rrset.rdtype)
+    for rdata in rrset:
         out.append(
             {
-                "name": rr.name.to_text(omit_final_dot=True),
-                "ttl": rr.ttl,
-                "type": dns.rdatatype.to_text(rr.rdtype),
-                "data": rr.to_text(),
+                "name": name,
+                "ttl": ttl,
+                "type": rdtype,
+                "data": rdata.to_text(),
             }
         )
     return out
@@ -180,35 +186,19 @@ async def dns_dnssec_probe(input: DNSDnssecProbeInput) -> dict:
     try:
         ans = r.resolve(apex, dns.rdatatype.A, raise_on_no_answer=False)
         if ans.rrset and ans.response:
-            if ans.response.additional and len(ans.response.answer) > 0:
-                pass
-            for sec in getattr(ans.response, "answer", []) or []:
-                if sec.rdtype == dns.rdatatype.RRSIG:
-                    rrsig_on_a = _answer_to_records(
-                        dns.resolver.Answer(
-                            ans.qname,
-                            ans.qclass,
-                            dns.rdatatype.RRSIG,
-                            sec,
-                            True,
-                        )
-                    )
-                    break
-            if rrsig_on_a is None:
-                for sec in ans.response.answer:
-                    for rr in sec:
-                        if rr.rdtype == dns.rdatatype.RRSIG:
-                            rrsig_on_a = [
-                                {
-                                    "name": rr.name.to_text(omit_final_dot=True),
-                                    "ttl": rr.ttl,
-                                    "type": "RRSIG",
-                                    "data": rr.to_text(),
-                                }
-                            ]
-                            break
-                    if rrsig_on_a:
-                        break
+            for rrset in ans.response.answer:
+                if rrset.rdtype != dns.rdatatype.RRSIG:
+                    continue
+                rrsig_on_a = [
+                    {
+                        "name": rrset.name.to_text(omit_final_dot=True),
+                        "ttl": rrset.ttl,
+                        "type": "RRSIG",
+                        "data": rdata.to_text(),
+                    }
+                    for rdata in rrset
+                ]
+                break
     except Exception as e:
         rrsig_err = str(e)
 

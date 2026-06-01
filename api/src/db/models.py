@@ -121,6 +121,11 @@ class AgentToolSetLink(SQLModel, table=True):
     agent_id: int = Field(foreign_key="agent.id", primary_key=True)
     toolset_id: int = Field(foreign_key="toolset.id", primary_key=True)
 
+class AgentToolLink(SQLModel, table=True):
+    __tablename__ = "agent_tool_link"
+    agent_id: int = Field(foreign_key="agent.id", primary_key=True)
+    tool_id: int = Field(foreign_key="tool.id", primary_key=True)
+
 class Agent(AgentBase, table=True):
     id: int | None = Field(default=None, primary_key=True)
     agent_type: AgentType = Field(sa_column=Column(_AGENT_TYPE_PG))
@@ -129,6 +134,7 @@ class Agent(AgentBase, table=True):
     user: Optional["User"] = Relationship(back_populates="agents")
     stacks: List["Stack"] = Relationship(back_populates="agents", link_model=AgentStackLink)
     toolsets: List["ToolSet"] = Relationship(back_populates="agents", link_model=AgentToolSetLink)
+    tools: List["Tool"] = Relationship(link_model=AgentToolLink)
     llm_id: int | None = Field(default=None, foreign_key="llm.id")
     llm: Optional["LLM"] = Relationship(back_populates="agents")
     system_prompt: str
@@ -138,10 +144,11 @@ class AgentPublic(AgentBase):
     id: int
     name: str
     system_prompt: str
-    stacks: List["Stack"]
+    stacks: List["StackSummaryPublic"]
     agent_type: AgentType
     role: AgentRole
-    toolsets: List["ToolSet"]
+    toolsets: List["ToolSetPublic"]
+    tools: List["ToolPublic"] = []
     llm: Optional["LLMPublic"] = None
     created: datetime
 
@@ -150,8 +157,9 @@ class AgentPublic(AgentBase):
     def _agent_orm_to_public(cls, data: Any) -> Any:
         if not isinstance(data, Agent):
             return data
-        stacks = list(data.stacks) if data.stacks is not None else []
-        toolsets = list(data.toolsets) if data.toolsets is not None else []
+        stacks = [StackSummaryPublic.model_validate(s) for s in (data.stacks or [])]
+        toolsets = [ToolSetPublic.model_validate(t) for t in (data.toolsets or [])]
+        tools = [ToolPublic.model_validate(t) for t in (data.tools or [])]
         llm_public = None
         llm_row = getattr(data, "llm", None)
         if llm_row is not None:
@@ -165,6 +173,7 @@ class AgentPublic(AgentBase):
             "system_prompt": data.system_prompt,
             "stacks": stacks,
             "toolsets": toolsets,
+            "tools": tools,
             "llm": llm_public,
             "created": data.created,
         }
@@ -190,6 +199,24 @@ class StackPublic(StackBase):
     agents: List["AgentPublic"]
     created: datetime
 
+class StackSummaryPublic(StackBase):
+    id: int
+    name: str
+    description: str
+    created: datetime
+
+    @model_validator(mode="before")
+    @classmethod
+    def _stack_orm_to_summary(cls, data: Any) -> Any:
+        if isinstance(data, Stack):
+            return {
+                "id": data.id,
+                "name": data.name,
+                "description": data.description,
+                "created": data.created,
+            }
+        return data
+
 # Tool Models
 class ToolBase(SQLModel):
     name: str
@@ -214,14 +241,20 @@ class ToolPublic(ToolBase):
     url: Optional[str] = None
     created: datetime
 
+class ToolSetToolLink(SQLModel, table=True):
+    __tablename__ = "toolset_tool_link"
+    toolset_id: int = Field(foreign_key="toolset.id", primary_key=True)
+    tool_id: int = Field(foreign_key="tool.id", primary_key=True)
+
 class ToolSetBase(SQLModel):
     name: str
     description: str
-    url: str
+    url: str = ""
 
 class ToolSet(ToolSetBase, table=True):
     id: int | None = Field(default=None, primary_key=True)
     tools: List["Tool"] = Relationship(back_populates="toolset")
+    member_tools: List["Tool"] = Relationship(link_model=ToolSetToolLink)
     agents: List["Agent"] = Relationship(back_populates="toolsets", link_model=AgentToolSetLink)
     auth_required: bool = Field(default=False)
     auth_type: Optional[AuthType] | None = Field(default=AuthType.BEARER)
@@ -258,13 +291,17 @@ class ToolSetPublic(ToolSetBase):
     @classmethod
     def _toolset_orm_to_public(cls, data: Any) -> Any:
         if isinstance(data, ToolSet):
+            if data.type == ToolType.LOGICAL:
+                catalog_tools = data.member_tools or []
+            else:
+                catalog_tools = data.tools or []
             return {
                 "id": data.id,
                 "name": data.name,
                 "description": data.description,
-                "url": data.url,
+                "url": data.url or "",
                 "type": data.type,
-                "tools": [ToolPublic.model_validate(t) for t in (data.tools or [])],
+                "tools": [ToolPublic.model_validate(t) for t in catalog_tools],
                 "scope": "shared" if data.user_id is None else "private",
                 "user_id": data.user_id,
                 "auth_required": data.auth_required,
