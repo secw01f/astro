@@ -1,6 +1,7 @@
 import click
 
 from lib.color import magenta, red, white, green
+from lib.tools import unique_tool_catalog
 
 @click.group(help="List tools and manage toolsets")
 def tools():
@@ -31,6 +32,11 @@ def list_tools_and_toolsets(ctx: click.Context, toolsets: bool, tools: bool, id:
                 f"{magenta('Auth required:', 'bold')} {toolset.get('auth_required', False)}\n"
                 f"{magenta('Created:', 'bold')} {toolset['created']}"
             )
+            member_tools = toolset.get("tools") or []
+            if member_tools:
+                click.echo(f"{magenta('Tools:', 'bold')}")
+                for tool in member_tools:
+                    click.echo(f"  {tool['id']}: {tool['name']}")
             return
 
         response = client.get("/tool/toolsets")
@@ -61,13 +67,25 @@ def list_tools_and_toolsets(ctx: click.Context, toolsets: bool, tools: bool, id:
             click.echo(f"{magenta("ID:", "bold")} {tool['id']}\n{magenta("Name:", "bold")} {tool['name']}\n{magenta("Description:", "bold")} {tool['description']}\n{magenta("Type:", "bold")} {tool['type']}\n{magenta("Created:", "bold")} {tool['created']}")
             return
 
-        response = client.get("/tool/tools")
+        response = client.get("/tool/toolsets")
         if response.status_code != 200:
             click.echo(f"Failed to list tools: {response.text}")
             return
-        tools = response.json()["tools"]
-        for tool in tools:
-            click.echo(f"{magenta("ID:", "bold")} {tool['id']}\n{magenta("Name:", "bold")} {tool['name']}\n{magenta("Description:", "bold")} {tool['description']}\n{magenta("Type:", "bold")} {tool['type']}\n{magenta("Created:", "bold")} {tool['created']}")
+        toolsets = response.json().get("toolsets", [])
+        catalog = unique_tool_catalog(toolsets)
+        if not catalog:
+            click.echo(white("No tools available.", "normal"))
+            return
+        for tool_id, entry in sorted(catalog.items()):
+            tool = entry["tool"]
+            click.echo(
+                f"{magenta('ID:', 'bold')} {tool_id}\n"
+                f"{magenta('Name:', 'bold')} {tool['name']}\n"
+                f"{magenta('Description:', 'bold')} {tool['description']}\n"
+                f"{magenta('Type:', 'bold')} {tool['type']}\n"
+                f"{magenta('In toolsets:', 'bold')} {', '.join(entry['toolset_names'])}\n"
+                f"{magenta('Created:', 'bold')} {tool['created']}"
+            )
             click.echo("\n")
         return
 
@@ -75,8 +93,9 @@ def list_tools_and_toolsets(ctx: click.Context, toolsets: bool, tools: bool, id:
 @click.pass_context
 @click.option("--name", type=click.STRING, required=True, help="Name of the tool")
 @click.option("--description", type=click.STRING, required=True, help="Description of the tool")
-@click.option("--type", type=click.Choice(["http", "mcp"]), required=True, help="Type of the tool")
-@click.option("--url", type=click.STRING, required=False, help="URL of the tool")
+@click.option("--type", type=click.Choice(["http", "mcp", "logical"]), required=True, help="Type of the toolset")
+@click.option("--url", type=click.STRING, required=False, help="URL of the tool (HTTP/MCP only)")
+@click.option("--tool-id", "tool_ids", type=click.INT, multiple=True, help="Member tool ID (logical toolsets only)")
 @click.option("--auth-required", is_flag=True, default=False, help="Require authentication for this toolset")
 @click.option("--auth-type", type=click.Choice(["bearer", "header"]), required=False, help="Authentication type when auth is required")
 @click.option("--token", type=click.STRING, required=False, help="Raw token used to create a credential when auth is required")
@@ -93,8 +112,47 @@ def create(
     token: str | None,
     header: str | None,
     shared: bool,
+    tool_ids: tuple[int, ...],
 ):
     client = ctx.obj["client"]
+
+    if type == "logical":
+        if url or auth_required or auth_type or token or header:
+            click.echo(red("Failed to create toolset", "bold"))
+            click.echo(
+                white(
+                    "Error: logical toolsets do not use --url, --auth-required, --auth-type, --token, or --header",
+                    "normal",
+                )
+            )
+            return
+        if not tool_ids:
+            click.echo(red("Failed to create toolset", "bold"))
+            click.echo(white("Error: provide at least one --tool-id for a logical toolset", "normal"))
+            return
+        create_response = client.post(
+            "/tool/create/toolset/logical",
+            json={
+                "name": name,
+                "description": description,
+                "tool_ids": list(tool_ids),
+                "shared": shared,
+            },
+        )
+        if create_response.status_code != 200:
+            click.echo(red("Failed to create logical toolset", "bold"))
+            click.echo(white(f"Error: {create_response.text}", "normal"))
+            return
+        toolset = create_response.json()["toolset"]
+        click.echo(
+            f"{magenta('ID:', 'bold')} {toolset['id']}\n"
+            f"{magenta('Name:', 'bold')} {toolset['name']}\n"
+            f"{magenta('Description:', 'bold')} {toolset['description']}\n"
+            f"{magenta('Type:', 'bold')} {toolset['type']}\n"
+            f"{magenta('Tools:', 'bold')} {len(toolset.get('tools', []))}\n"
+            f"{magenta('Created:', 'bold')} {toolset['created']}"
+        )
+        return
 
     if shared and auth_required and token:
         click.echo(red("Failed to create toolset", "bold"))
@@ -165,6 +223,7 @@ def create(
 @click.option("--auth-type", type=click.Choice(["bearer", "header"]), required=False, help="Authentication type")
 @click.option("--header", type=click.STRING, required=False, help="Custom header name when auth-type is header")
 @click.option("--sync-tools", is_flag=True, default=False, help="Re-fetch HTTP tools from the server (HTTP toolsets only)")
+@click.option("--tool-id", "tool_ids", type=click.INT, multiple=True, help="Replace member tools (logical toolsets only)")
 def update_toolset(
     ctx: click.Context,
     id: int,
@@ -175,6 +234,7 @@ def update_toolset(
     auth_type: str | None,
     header: str | None,
     sync_tools: bool,
+    tool_ids: tuple[int, ...],
 ):
     client = ctx.obj["client"]
     payload: dict = {}
@@ -192,6 +252,8 @@ def update_toolset(
         payload["header"] = header
     if sync_tools:
         payload["sync_tools"] = True
+    if tool_ids:
+        payload["tool_ids"] = list(tool_ids)
 
     if not payload:
         click.echo(red("Failed to update toolset", "bold"))

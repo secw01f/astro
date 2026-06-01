@@ -30,7 +30,7 @@ async def exec_tool(exec: ExecTool):
     try:
         result = await asyncio.wait_for(
             tool.func(tool.input(**exec.arguments)),
-            timeout=20
+            timeout=30
         )
 
         return ExecResponse(result=result)

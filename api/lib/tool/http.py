@@ -48,7 +48,11 @@ class HttpToolInvoker:
             )
             response.raise_for_status()
             data = response.json()
-            return data.get("result", data)
+            result = data.get("result", data)
+            error = data.get("error")
+            if result is None and error:
+                return {"error": error}
+            return result
 
 
 def _signed_headers(method: str, url: str) -> dict[str, str]:

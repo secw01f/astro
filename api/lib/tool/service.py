@@ -8,8 +8,15 @@ from lib.auth.enums import Role
 from lib.tool.enums import AuthType, ToolType
 from lib.tool.http import get_tools
 from lib.tool.models import ToolsResponse
-from lib.tool.access import get_user_toolset_token
-from src.db.models import Tool, ToolSet, AgentToolSetLink, UserToolSetCredential
+from lib.tool.access import get_user_toolset_token, load_assignable_tools
+from src.db.models import (
+    Tool,
+    ToolSet,
+    AgentToolSetLink,
+    AgentToolLink,
+    ToolSetToolLink,
+    UserToolSetCredential,
+)
 
 def validate_auth_fields(
     auth_required: bool,
@@ -28,10 +35,21 @@ def resolve_toolset_owner(shared: bool, user_id: int, role: Role) -> int | None:
         return None
     return user_id
 
+async def _delete_tool_membership_links(session: AsyncSession, tool_ids: list[int]) -> None:
+    if not tool_ids:
+        return
+    statement = select(ToolSetToolLink).where(ToolSetToolLink.tool_id.in_(tool_ids))
+    result = await session.exec(statement)
+    for link in result.all():
+        await session.delete(link)
+
 async def delete_toolset_tools(session: AsyncSession, toolset_id: int) -> None:
     statement = select(Tool).where(Tool.toolset_id == toolset_id)
     result = await session.exec(statement)
-    for tool in result.all():
+    tools = result.all()
+    tool_ids = [tool.id for tool in tools if tool.id is not None]
+    await _delete_tool_membership_links(session, tool_ids)
+    for tool in tools:
         await session.delete(tool)
 
 async def sync_http_toolset_tools(
@@ -86,17 +104,51 @@ async def replace_mcp_toolset_tools(
             )
         )
 
+async def replace_logical_toolset_members(
+    session: AsyncSession,
+    toolset: ToolSet,
+    tool_ids: list[int],
+    user_id: int,
+) -> None:
+    tools = await load_assignable_tools(session, tool_ids, user_id)
+    statement = select(ToolSetToolLink).where(ToolSetToolLink.toolset_id == toolset.id)
+    result = await session.exec(statement)
+    for link in result.all():
+        await session.delete(link)
+    for tool in tools:
+        if tool.id is None:
+            continue
+        session.add(ToolSetToolLink(toolset_id=toolset.id, tool_id=tool.id))
+
+async def delete_logical_toolset_links(session: AsyncSession, toolset_id: int) -> None:
+    statement = select(ToolSetToolLink).where(ToolSetToolLink.toolset_id == toolset_id)
+    result = await session.exec(statement)
+    for link in result.all():
+        await session.delete(link)
+
 async def delete_toolset_record(session: AsyncSession, toolset: ToolSet) -> None:
     statement = select(AgentToolSetLink).where(AgentToolSetLink.toolset_id == toolset.id)
     result = await session.exec(statement)
     for link in result.all():
         await session.delete(link)
 
+    if toolset.type == ToolType.LOGICAL:
+        await delete_logical_toolset_links(session, toolset.id)
+    else:
+        statement = select(Tool).where(Tool.toolset_id == toolset.id)
+        result = await session.exec(statement)
+        tool_ids = [tool.id for tool in result.all() if tool.id is not None]
+        if tool_ids:
+            statement = select(AgentToolLink).where(AgentToolLink.tool_id.in_(tool_ids))
+            result = await session.exec(statement)
+            for link in result.all():
+                await session.delete(link)
+        await delete_toolset_tools(session, toolset.id)
+
     statement = select(UserToolSetCredential).where(UserToolSetCredential.toolset_id == toolset.id)
     result = await session.exec(statement)
     for link in result.all():
         await session.delete(link)
 
-    await delete_toolset_tools(session, toolset.id)
     await session.delete(toolset)
     await session.commit()

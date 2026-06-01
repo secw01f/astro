@@ -7,7 +7,13 @@ from sqlalchemy.orm import selectinload
 
 from lib.auth.enums import Role
 from lib.credentials import decrypt_token, encrypt_token
-from src.db.models import ToolSet, Credential, UserToolSetCredential
+from lib.tool.enums import ToolType
+from src.db.models import Tool, ToolSet, Credential, UserToolSetCredential
+
+_TOOLSET_LOAD_OPTIONS = (
+    selectinload(ToolSet.tools),
+    selectinload(ToolSet.member_tools).selectinload(Tool.toolset),
+)
 
 def claims_from_request(request: Request) -> tuple[int, Role]:
     claims = getattr(request.state, "claims", None)
@@ -43,7 +49,7 @@ async def get_toolset_or_404(
 ) -> ToolSet:
     statement = select(ToolSet).where(ToolSet.id == toolset_id, toolset_visibility_filter(user_id))
     if load_tools:
-        statement = statement.options(selectinload(ToolSet.tools))
+        statement = statement.options(*_TOOLSET_LOAD_OPTIONS)
     result = await session.exec(statement)
     toolset = result.first()
     if not toolset:
@@ -60,7 +66,7 @@ async def load_assignable_toolsets(
     statement = (
         select(ToolSet)
         .where(ToolSet.id.in_(toolset_ids), toolset_visibility_filter(user_id))
-        .options(selectinload(ToolSet.tools))
+        .options(*_TOOLSET_LOAD_OPTIONS)
     )
     result = await session.exec(statement)
     toolsets = result.all()
@@ -75,6 +81,50 @@ async def load_assignable_toolsets(
             },
         )
     return list(toolsets)
+
+async def load_assignable_tools(
+    session: AsyncSession,
+    tool_ids: list[int],
+    user_id: int,
+) -> list[Tool]:
+    if not tool_ids:
+        return []
+    statement = (
+        select(Tool)
+        .join(ToolSet, Tool.toolset_id == ToolSet.id)
+        .where(
+            Tool.id.in_(tool_ids),
+            toolset_visibility_filter(user_id),
+            ToolSet.type != ToolType.LOGICAL,
+        )
+        .options(selectinload(Tool.toolset))
+    )
+    result = await session.exec(statement)
+    tools = result.all()
+    found = {t.id for t in tools}
+    missing = set(tool_ids) - found
+    if missing:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "message": "One or more tools do not exist or are not accessible",
+                "tool_ids": sorted(missing),
+            },
+        )
+    invalid = [
+        t.id
+        for t in tools
+        if t.id is not None and t.toolset is not None and t.toolset.type == ToolType.LOGICAL
+    ]
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Logical toolsets cannot include tools that belong to another logical toolset",
+                "tool_ids": sorted(invalid),
+            },
+        )
+    return list(tools)
 
 async def get_user_toolset_credential_row(
     session: AsyncSession,

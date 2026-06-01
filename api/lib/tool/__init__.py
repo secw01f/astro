@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 if TYPE_CHECKING:
-    from src.db.models import ToolSet
+    from src.db.models import Tool as DbTool, ToolSet
 
 def toolset(tools: list[Tool | Toolset | ComponentTool | MCPToolset]) -> SearchableToolset:
     catalog = tools
@@ -35,9 +35,10 @@ async def validate_toolsets_ready_for_agent(
     toolsets: list[ToolSet],
 ) -> None:
     from lib.tool.access import user_has_toolset_credential
+    from lib.tool.logical import compound_toolsets
 
     unconfigured_auth_toolsets: list[int] = []
-    for toolset in toolsets:
+    for toolset in compound_toolsets(toolsets):
         if toolset.id is None or not toolset.auth_required:
             continue
         if not await user_has_toolset_credential(session, user_id, toolset):
@@ -50,3 +51,14 @@ async def validate_toolsets_ready_for_agent(
                 "toolset_ids": sorted(unconfigured_auth_toolsets),
             },
         )
+
+async def validate_tools_ready_for_agent(
+    session: AsyncSession,
+    user_id: int,
+    tools: list["DbTool"],
+) -> None:
+    toolsets: dict[int, ToolSet] = {}
+    for tool in tools:
+        if tool.toolset is not None and tool.toolset.id is not None:
+            toolsets[tool.toolset.id] = tool.toolset
+    await validate_toolsets_ready_for_agent(session, user_id, list(toolsets.values()))
