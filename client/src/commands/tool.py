@@ -155,6 +155,67 @@ def create(
         click.echo(f"{magenta("ID:", "bold")} {toolset['id']}\n{magenta("Name:", "bold")} {toolset['name']}\n{magenta("Description:", "bold")} {toolset['description']}\n{magenta("Type:", "bold")} {toolset['type']}\n{magenta("Created:", "bold")} {toolset['created']}")
         return
 
+@tools.command(name="update", help="Update a toolset")
+@click.pass_context
+@click.argument("id", type=click.INT)
+@click.option("--name", type=click.STRING, required=False, help="Toolset name")
+@click.option("--description", type=click.STRING, required=False, help="Toolset description")
+@click.option("--url", type=click.STRING, required=False, help="Toolset URL")
+@click.option("--auth-required/--no-auth-required", default=None, help="Require per-user authentication")
+@click.option("--auth-type", type=click.Choice(["bearer", "header"]), required=False, help="Authentication type")
+@click.option("--header", type=click.STRING, required=False, help="Custom header name when auth-type is header")
+@click.option("--sync-tools", is_flag=True, default=False, help="Re-fetch HTTP tools from the server (HTTP toolsets only)")
+def update_toolset(
+    ctx: click.Context,
+    id: int,
+    name: str | None,
+    description: str | None,
+    url: str | None,
+    auth_required: bool | None,
+    auth_type: str | None,
+    header: str | None,
+    sync_tools: bool,
+):
+    client = ctx.obj["client"]
+    payload: dict = {}
+    if name is not None:
+        payload["name"] = name
+    if description is not None:
+        payload["description"] = description
+    if url is not None:
+        payload["url"] = url
+    if auth_required is not None:
+        payload["auth_required"] = auth_required
+    if auth_type is not None:
+        payload["auth_type"] = auth_type
+    if header is not None:
+        payload["header"] = header
+    if sync_tools:
+        payload["sync_tools"] = True
+
+    if not payload:
+        click.echo(red("Failed to update toolset", "bold"))
+        click.echo(white("Error: provide at least one field to update", "normal"))
+        return
+
+    response = client.patch(f"/tool/toolset/{id}", json=payload)
+    if response.status_code != 200:
+        click.echo(red("Failed to update toolset", "bold"))
+        click.echo(white(f"Error: {response.text}", "normal"))
+        return
+
+    toolset = response.json()["toolset"]
+    scope = toolset.get("scope", "private")
+    click.echo(
+        f"{green('ID:', 'bold')} {toolset['id']}\n"
+        f"{green('Name:', 'bold')} {toolset['name']}\n"
+        f"{green('Description:', 'bold')} {toolset['description']}\n"
+        f"{green('Type:', 'bold')} {toolset['type']}\n"
+        f"{green('Scope:', 'bold')} {scope}\n"
+        f"{green('Auth required:', 'bold')} {toolset.get('auth_required', False)}\n"
+        f"{green('Created:', 'bold')} {toolset['created']}"
+    )
+
 @tools.command(name="credential", help="Set your credential for an authenticated toolset")
 @click.pass_context
 @click.argument("id", type=click.INT)

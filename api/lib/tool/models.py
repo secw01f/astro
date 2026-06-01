@@ -24,6 +24,16 @@ class CreateHttpToolSet(BaseModel):
     url: str
     shared: Optional[bool] = False
 
+class UpdateToolSet(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    url: Optional[str] = None
+    auth_required: Optional[bool] = None
+    auth_type: Optional[AuthType] = None
+    header: Optional[str] = None
+    sync_tools: Optional[bool] = None
+    tools: Optional[list[str]] = None
+
 class SetToolSetCredential(BaseModel):
     token: str
 
