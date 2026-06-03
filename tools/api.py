@@ -8,8 +8,6 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from src.web import web_router
 from src.reporting import reporting_router
-from src.recon import recon_router
-from src.appsec import appsec_router
 from src.asm import asm_router
 from src.dns import dns_router
 from src.threatmodel import threatmodel_router
@@ -72,8 +70,6 @@ async def startup():
 
 api.include_router(web_router)
 api.include_router(reporting_router)
-api.include_router(recon_router)
-api.include_router(appsec_router)
 api.include_router(asm_router)
 api.include_router(dns_router)
 api.include_router(threatmodel_router)

@@ -192,30 +192,30 @@ async def startup_event():
         else:
             logger.info("Default DNS toolset tools already up to date")
 
-        _recon_toolset_statement = select(ToolSet).where(
-            ToolSet.name == "Recon",
-            ToolSet.url == f"{settings.DEFAULT_TOOLS_BASE_URL}/recon",
+        _reporting_toolset_statement = select(ToolSet).where(
+            ToolSet.name == "Reporting",
+            ToolSet.url == f"{settings.DEFAULT_TOOLS_BASE_URL}/reporting",
             ToolSet.type == ToolType.HTTP,
         )
-        recon_toolset = (await session.exec(_recon_toolset_statement)).first()
+        reporting_toolset = (await session.exec(_reporting_toolset_statement)).first()
 
-        if recon_toolset is None:
-            logger.info("Creating default Recon toolset")
-            recon_toolset = ToolSet(
-                name="Recon",
-                description="A toolset for reconnaissance",
-                url=f"{settings.DEFAULT_TOOLS_BASE_URL}/recon",
+        if reporting_toolset is None:
+            logger.info("Creating default Reporting toolset")
+            reporting_toolset = ToolSet(
+                name="Reporting",
+                description="A toolset for reporting",
+                url=f"{settings.DEFAULT_TOOLS_BASE_URL}/reporting",
                 type=ToolType.HTTP,
             )
-            session.add(recon_toolset)
+            session.add(reporting_toolset)
             await session.commit()
-            await session.refresh(recon_toolset)
+            await session.refresh(reporting_toolset)
         else:
-            logger.info("Default Recon toolset already exists")
+            logger.info("Default Reporting toolset already exists")
 
-        _tools = await get_tools(recon_toolset.url)
+        _tools = await get_tools(reporting_toolset.url)
         _parsed_tools = ToolsResponse.model_validate(_tools)
-        _existing_tools_statement = select(Tool).where(Tool.toolset_id == recon_toolset.id)
+        _existing_tools_statement = select(Tool).where(Tool.toolset_id == reporting_toolset.id)
         _existing_tools = (await session.exec(_existing_tools_statement)).all()
         _existing_tool_names = {tool.name for tool in _existing_tools}
         created_count = 0
@@ -228,339 +228,244 @@ async def startup_event():
                     name=tool.name,
                     description=tool.description,
                     input=tool.input_schema,
-                    toolset_id=recon_toolset.id,
+                    toolset_id=reporting_toolset.id,
                     type=ToolType.HTTP,
-                    url=recon_toolset.url,
+                    url=reporting_toolset.url,
                 )
             )
             created_count += 1
 
         if created_count > 0:
             await session.commit()
-            logger.info("Added %s new tool(s) to default Recon toolset", created_count)
+            logger.info("Added %s new tool(s) to default Reporting toolset", created_count)
         else:
-            logger.info("Default Recon toolset tools already up to date")
+            logger.info("Default Reporting toolset tools already up to date")
 
-    _reporting_toolset_statement = select(ToolSet).where(
-        ToolSet.name == "Reporting",
-        ToolSet.url == f"{settings.DEFAULT_TOOLS_BASE_URL}/reporting",
-        ToolSet.type == ToolType.HTTP,
-    )
-    reporting_toolset = (await session.exec(_reporting_toolset_statement)).first()
-
-    if reporting_toolset is None:
-        logger.info("Creating default Reporting toolset")
-        reporting_toolset = ToolSet(
-            name="Reporting",
-            description="A toolset for reporting",
-            url=f"{settings.DEFAULT_TOOLS_BASE_URL}/reporting",
-            type=ToolType.HTTP,
+        _asm_toolset_statement = select(ToolSet).where(
+            ToolSet.name == "ASM",
+            ToolSet.url == f"{settings.DEFAULT_TOOLS_BASE_URL}/asm",
+            ToolSet.type == ToolType.HTTP,
         )
-        session.add(reporting_toolset)
-        await session.commit()
-        await session.refresh(reporting_toolset)
-    else:
-        logger.info("Default Reporting toolset already exists")
+        asm_toolset = (await session.exec(_asm_toolset_statement)).first()
 
-    _tools = await get_tools(reporting_toolset.url)
-    _parsed_tools = ToolsResponse.model_validate(_tools)
-    _existing_tools_statement = select(Tool).where(Tool.toolset_id == reporting_toolset.id)
-    _existing_tools = (await session.exec(_existing_tools_statement)).all()
-    _existing_tool_names = {tool.name for tool in _existing_tools}
-    created_count = 0
-
-    for tool in _parsed_tools.tools:
-        if tool.name in _existing_tool_names:
-            continue
-        session.add(
-            Tool(
-                name=tool.name,
-                description=tool.description,
-                input=tool.input_schema,
-                toolset_id=reporting_toolset.id,
+        if asm_toolset is None:
+            logger.info("Creating default ASM toolset")
+            asm_toolset = ToolSet(
+                name="ASM",
+                description="A toolset for Attack Surface Management",
+                url=f"{settings.DEFAULT_TOOLS_BASE_URL}/asm",
                 type=ToolType.HTTP,
-                url=reporting_toolset.url,
             )
+            session.add(asm_toolset)
+            await session.commit()
+            await session.refresh(asm_toolset)
+        else:
+            logger.info("Default ASM toolset already exists")
+
+        _tools = await get_tools(asm_toolset.url)
+        _parsed_tools = ToolsResponse.model_validate(_tools)
+        _existing_tools_statement = select(Tool).where(Tool.toolset_id == asm_toolset.id)
+        _existing_tools = (await session.exec(_existing_tools_statement)).all()
+        _existing_tool_names = {tool.name for tool in _existing_tools}
+        created_count = 0
+
+        for tool in _parsed_tools.tools:
+            if tool.name in _existing_tool_names:
+                continue
+            session.add(
+                Tool(
+                    name=tool.name,
+                    description=tool.description,
+                    input=tool.input_schema,
+                    toolset_id=asm_toolset.id,
+                    type=ToolType.HTTP,
+                    url=asm_toolset.url,
+                )
+            )
+            created_count += 1
+
+        if created_count > 0:
+            await session.commit()
+            logger.info("Added %s new tool(s) to default ASM toolset", created_count)
+        else:
+            logger.info("Default ASM toolset tools already up to date")
+
+        _threatmodel_toolset_statement = select(ToolSet).where(
+            ToolSet.name == "Threat Model",
+            ToolSet.url == f"{settings.DEFAULT_TOOLS_BASE_URL}/threatmodel",
+            ToolSet.type == ToolType.HTTP,
         )
-        created_count += 1
+        threatmodel_toolset = (await session.exec(_threatmodel_toolset_statement)).first()
 
-    if created_count > 0:
-        await session.commit()
-        logger.info("Added %s new tool(s) to default Reporting toolset", created_count)
-    else:
-        logger.info("Default Reporting toolset tools already up to date")
-
-    _appsec_toolset_statement = select(ToolSet).where(
-        ToolSet.name == "Appsec",
-        ToolSet.url == f"{settings.DEFAULT_TOOLS_BASE_URL}/appsec",
-        ToolSet.type == ToolType.HTTP,
-    )
-    appsec_toolset = (await session.exec(_appsec_toolset_statement)).first()
-
-    if appsec_toolset is None:
-        logger.info("Creating default Appsec toolset")
-        appsec_toolset = ToolSet(
-            name="Appsec",
-            description="A toolset for application security",
-            url=f"{settings.DEFAULT_TOOLS_BASE_URL}/appsec",
-            type=ToolType.HTTP,
-        )
-        session.add(appsec_toolset)
-        await session.commit()
-        await session.refresh(appsec_toolset)
-    else:
-        logger.info("Default Appsec toolset already exists")
-
-    _tools = await get_tools(appsec_toolset.url)
-    _parsed_tools = ToolsResponse.model_validate(_tools)
-    _existing_tools_statement = select(Tool).where(Tool.toolset_id == appsec_toolset.id)
-    _existing_tools = (await session.exec(_existing_tools_statement)).all()
-    _existing_tool_names = {tool.name for tool in _existing_tools}
-    created_count = 0
-
-    for tool in _parsed_tools.tools:
-        if tool.name in _existing_tool_names:
-            continue
-        session.add(
-            Tool(
-                name=tool.name,
-                description=tool.description,
-                input=tool.input_schema,
-                toolset_id=appsec_toolset.id,
+        if threatmodel_toolset is None:
+            logger.info("Creating default Threat Model toolset")
+            threatmodel_toolset = ToolSet(
+                name="Threat Model",
+                description="A toolset for threat modeling",
+                url=f"{settings.DEFAULT_TOOLS_BASE_URL}/threatmodel",
                 type=ToolType.HTTP,
-                url=appsec_toolset.url,
             )
-        )
-        created_count += 1
+            session.add(threatmodel_toolset)
+            await session.commit()
+            await session.refresh(threatmodel_toolset)
+        else:
+            logger.info("Default Threat Model toolset already exists")
 
-    if created_count > 0:
-        await session.commit()
-        logger.info("Added %s new tool(s) to default Appsec toolset", created_count)
-    else:
-        logger.info("Default Appsec toolset tools already up to date")
+        _tools = await get_tools(threatmodel_toolset.url)
+        _parsed_tools = ToolsResponse.model_validate(_tools)
+        _existing_tools_statement = select(Tool).where(Tool.toolset_id == threatmodel_toolset.id)
+        _existing_tools = (await session.exec(_existing_tools_statement)).all()
+        _existing_tool_names = {tool.name for tool in _existing_tools}
+        created_count = 0
 
-    _asm_toolset_statement = select(ToolSet).where(
-        ToolSet.name == "ASM",
-        ToolSet.url == f"{settings.DEFAULT_TOOLS_BASE_URL}/asm",
-        ToolSet.type == ToolType.HTTP,
-    )
-    asm_toolset = (await session.exec(_asm_toolset_statement)).first()
-    
-    if asm_toolset is None:
-        logger.info("Creating default ASM toolset")
-        asm_toolset = ToolSet(
-            name="ASM",
-            description="A toolset for Attack Surface Management",
-            url=f"{settings.DEFAULT_TOOLS_BASE_URL}/asm",
-            type=ToolType.HTTP,
-        )
-        session.add(asm_toolset)
-        await session.commit()
-        await session.refresh(asm_toolset)
-    else:
-        logger.info("Default ASM toolset already exists")
-
-    _tools = await get_tools(asm_toolset.url)
-    _parsed_tools = ToolsResponse.model_validate(_tools)
-    _existing_tools_statement = select(Tool).where(Tool.toolset_id == asm_toolset.id)
-    _existing_tools = (await session.exec(_existing_tools_statement)).all()
-    _existing_tool_names = {tool.name for tool in _existing_tools}
-    created_count = 0
-
-    for tool in _parsed_tools.tools:
-        if tool.name in _existing_tool_names:
-            continue
-        session.add(
-            Tool(
-                name=tool.name,
-                description=tool.description,
-                input=tool.input_schema,
-                toolset_id=asm_toolset.id,
-                type=ToolType.HTTP,
-                url=asm_toolset.url,
+        for tool in _parsed_tools.tools:
+            if tool.name in _existing_tool_names:
+                continue
+            session.add(
+                Tool(
+                    name=tool.name,
+                    description=tool.description,
+                    input=tool.input_schema,
+                    toolset_id=threatmodel_toolset.id,
+                    type=ToolType.HTTP,
+                    url=threatmodel_toolset.url,
+                )
             )
+            created_count += 1
+
+        if created_count > 0:
+            await session.commit()
+            logger.info("Added %s new tool(s) to default Threat Model toolset", created_count)
+        else:
+            logger.info("Default Threat Model toolset tools already up to date")
+
+        _github_repos_read_only_toolset_statement = select(ToolSet).where(
+            ToolSet.name == "GitHub - Repos Read Only",
+            ToolSet.url == "https://api.githubcopilot.com/mcp/x/repos/readonly",
+            ToolSet.type == ToolType.MCP,
         )
-        created_count += 1
+        github_repos_read_only_toolset = (await session.exec(_github_repos_read_only_toolset_statement)).first()
 
-    if created_count > 0:
-        await session.commit()
-        logger.info("Added %s new tool(s) to default ASM toolset", created_count)
-    else:
-        logger.info("Default ASM toolset tools already up to date")
-
-    _threatmodel_toolset_statement = select(ToolSet).where(
-        ToolSet.name == "Threat Model",
-        ToolSet.url == f"{settings.DEFAULT_TOOLS_BASE_URL}/threatmodel",
-        ToolSet.type == ToolType.HTTP,
-    )
-    threatmodel_toolset = (await session.exec(_threatmodel_toolset_statement)).first()
-    
-    if threatmodel_toolset is None:
-        logger.info("Creating default Threat Model toolset")
-        threatmodel_toolset = ToolSet(
-            name="Threat Model",
-            description="A toolset for threat modeling",
-            url=f"{settings.DEFAULT_TOOLS_BASE_URL}/threatmodel",
-            type=ToolType.HTTP,
-        )
-        session.add(threatmodel_toolset)
-        await session.commit()
-        await session.refresh(threatmodel_toolset)
-    else:
-        logger.info("Default Threat Model toolset already exists")
-
-    _tools = await get_tools(threatmodel_toolset.url)
-    _parsed_tools = ToolsResponse.model_validate(_tools)
-    _existing_tools_statement = select(Tool).where(Tool.toolset_id == threatmodel_toolset.id)
-    _existing_tools = (await session.exec(_existing_tools_statement)).all()
-    _existing_tool_names = {tool.name for tool in _existing_tools}
-    created_count = 0
-
-    for tool in _parsed_tools.tools:
-        if tool.name in _existing_tool_names:
-            continue
-        session.add(
-            Tool(
-                name=tool.name,
-                description=tool.description,
-                input=tool.input_schema,
-                toolset_id=threatmodel_toolset.id,
-                type=ToolType.HTTP,
-                url=threatmodel_toolset.url,
+        if github_repos_read_only_toolset is None:
+            logger.info("Creating default GitHub - Repos Read Only toolset")
+            github_repos_read_only_toolset = ToolSet(
+                name="GitHub - Repos Read Only",
+                description="A toolset for read only access to GitHub repositories",
+                url="https://api.githubcopilot.com/mcp/x/repos/readonly",
+                type=ToolType.MCP,
+                auth_required=True,
             )
+            session.add(github_repos_read_only_toolset)
+            await session.commit()
+            await session.refresh(github_repos_read_only_toolset)
+            logger.info("Default GitHub - Repos Read Only toolset created")
+        else:
+            logger.info("Default GitHub - Repos Read Only toolset already exists")
+
+        _github_repos_full_access_toolset_statement = select(ToolSet).where(
+            ToolSet.name == "GitHub - Repos Full Access",
+            ToolSet.url == "https://api.githubcopilot.com/mcp/x/repos",
+            ToolSet.type == ToolType.MCP,
         )
-        created_count += 1
+        github_repos_full_access_toolset = (
+            await session.exec(_github_repos_full_access_toolset_statement)
+        ).first()
 
-    if created_count > 0:
-        await session.commit()
-        logger.info("Added %s new tool(s) to default Threat Model toolset", created_count)
-    else:
-        logger.info("Default Threat Model toolset tools already up to date")
+        if github_repos_full_access_toolset is None:
+            logger.info("Creating default GitHub - Repos Full Access toolset")
+            github_repos_full_access_toolset = ToolSet(
+                name="GitHub - Repos Full Access",
+                description="A toolset for full access to GitHub repositories",
+                url="https://api.githubcopilot.com/mcp/x/repos",
+                type=ToolType.MCP,
+                auth_required=True,
+            )
+            session.add(github_repos_full_access_toolset)
+            await session.commit()
+            await session.refresh(github_repos_full_access_toolset)
+            logger.info("Default GitHub - Repos Full Access toolset created")
+        else:
+            logger.info("Default GitHub - Repos Full Access toolset already exists")
 
-    _github_repos_read_only_toolset_statement = select(ToolSet).where(
-        ToolSet.name == "GitHub - Repos Read Only",
-        ToolSet.url == "https://api.githubcopilot.com/mcp/x/repos/readonly",
-        ToolSet.type == ToolType.MCP,
-    )
-    github_repos_read_only_toolset = (await session.exec(_github_repos_read_only_toolset_statement)).first()
-
-    if github_repos_read_only_toolset is None:
-        logger.info("Creating default GitHub - Repos Read Only toolset")
-        github_repos_read_only_toolset = ToolSet(
-            name="GitHub - Repos Read Only",
-            description="A toolset for read only access to GitHub repositories",
-            url="https://api.githubcopilot.com/mcp/x/repos/readonly",
-            type=ToolType.MCP,
-            auth_required=True
+        _github_git_read_only_toolset_statement = select(ToolSet).where(
+            ToolSet.name == "GitHub - Git Read Only",
+            ToolSet.url == "https://api.githubcopilot.com/mcp/x/git/readonly",
+            ToolSet.type == ToolType.MCP,
         )
-        session.add(github_repos_read_only_toolset)
-        await session.commit()
-        await session.refresh(github_repos_read_only_toolset)
+        github_git_read_only_toolset = (
+            await session.exec(_github_git_read_only_toolset_statement)
+        ).first()
 
-        logger.info("Default GitHub - Repos Read Only toolset created")
-    else:
-        logger.info("Default GitHub - Repos Read Only toolset already exists")
+        if github_git_read_only_toolset is None:
+            logger.info("Creating default GitHub - Git Read Only toolset")
+            github_git_read_only_toolset = ToolSet(
+                name="GitHub - Git Read Only",
+                description="A toolset for read only access to GitHub Git repositories",
+                url="https://api.githubcopilot.com/mcp/x/git/readonly",
+                type=ToolType.MCP,
+                auth_required=True,
+            )
+            session.add(github_git_read_only_toolset)
+            await session.commit()
+            await session.refresh(github_git_read_only_toolset)
+            logger.info("Default GitHub - Git Read Only toolset created")
+        else:
+            logger.info("Default GitHub - Git Read Only toolset already exists")
 
-    _github_repos_full_access_toolset_statement = select(ToolSet).where(
-        ToolSet.name == "GitHub - Repos Full Access",
-        ToolSet.url == "https://api.githubcopilot.com/mcp/x/repos",
-        ToolSet.type == ToolType.MCP,
-    )
-    github_repos_full_access_toolset = (await session.exec(_github_repos_full_access_toolset_statement)).first()
-
-    if github_repos_full_access_toolset is None:
-        logger.info("Creating default GitHub - Repos Full Access toolset")
-        github_repos_full_access_toolset = ToolSet(
-            name="GitHub - Repos Full Access",
-            description="A toolset for full access to GitHub repositories",
-            url="https://api.githubcopilot.com/mcp/x/repos",
-            type=ToolType.MCP,
-            auth_required=True
+        _github_git_full_access_toolset_statement = select(ToolSet).where(
+            ToolSet.name == "GitHub - Git Full Access",
+            ToolSet.url == "https://api.githubcopilot.com/mcp/x/git",
+            ToolSet.type == ToolType.MCP,
         )
-        session.add(github_repos_full_access_toolset)
-        await session.commit()
-        await session.refresh(github_repos_full_access_toolset)
+        github_git_full_access_toolset = (
+            await session.exec(_github_git_full_access_toolset_statement)
+        ).first()
 
-        logger.info("Default GitHub - Repos Full Access toolset created")
-    else:
-        logger.info("Default GitHub - Repos Full Access toolset already exists")
+        if github_git_full_access_toolset is None:
+            logger.info("Creating default GitHub - Git Full Access toolset")
+            github_git_full_access_toolset = ToolSet(
+                name="GitHub - Git Full Access",
+                description="A toolset for full access to GitHub Git repositories",
+                url="https://api.githubcopilot.com/mcp/x/git",
+                type=ToolType.MCP,
+                auth_required=True,
+            )
+            session.add(github_git_full_access_toolset)
+            await session.commit()
+            await session.refresh(github_git_full_access_toolset)
+            logger.info("Default GitHub - Git Full Access toolset created")
+        else:
+            logger.info("Default GitHub - Git Full Access toolset already exists")
 
-    _github_git_read_only_toolset_statement = select(ToolSet).where(
-        ToolSet.name == "GitHub - Git Read Only",
-        ToolSet.url == "https://api.githubcopilot.com/mcp/x/git/readonly",
-        ToolSet.type == ToolType.MCP,
-    )
-    github_git_read_only_toolset = (await session.exec(_github_git_read_only_toolset_statement)).first()
-    
-    if github_git_read_only_toolset is None:
-        logger.info("Creating default GitHub - Git Read Only toolset")
-        github_git_read_only_toolset = ToolSet(
-            name="GitHub - Git Read Only",
-            description="A toolset for read only access to GitHub Git repositories",
-            url="https://api.githubcopilot.com/mcp/x/git/readonly",
-            type=ToolType.MCP,
-            auth_required=True
+        _github_full_access_toolset_statement = select(ToolSet).where(
+            ToolSet.name == "GitHub Full Access",
+            ToolSet.url == "https://api.githubcopilot.com/mcp/",
+            ToolSet.type == ToolType.MCP,
         )
-        session.add(github_git_read_only_toolset)
-        await session.commit()
-        await session.refresh(github_git_read_only_toolset)
+        github_full_access_toolset = (
+            await session.exec(_github_full_access_toolset_statement)
+        ).first()
 
-        logger.info("Default GitHub - Git Read Only toolset created")
-    else:
-        logger.info("Default GitHub - Git Read Only toolset already exists")
+        if github_full_access_toolset is None:
+            logger.info("Creating default GitHub Full Access toolset")
+            github_full_access_toolset = ToolSet(
+                name="GitHub Full Access",
+                description="A toolset for full access to GitHub",
+                url="https://api.githubcopilot.com/mcp/",
+                type=ToolType.MCP,
+                auth_required=True,
+            )
+            session.add(github_full_access_toolset)
+            await session.commit()
+            await session.refresh(github_full_access_toolset)
+            logger.info("Default GitHub Full Access toolset created")
+        else:
+            logger.info("Default GitHub Full Access toolset already exists")
 
-    _github_git_full_access_toolset_statement = select(ToolSet).where(
-        ToolSet.name == "GitHub - Git Full Access",
-        ToolSet.url == "https://api.githubcopilot.com/mcp/x/git",
-        ToolSet.type == ToolType.MCP,
-    )
-    github_git_full_access_toolset = (await session.exec(_github_git_full_access_toolset_statement)).first()
-    
-    if github_git_full_access_toolset is None:
-        logger.info("Creating default GitHub - Git Full Access toolset")
-        github_git_full_access_toolset = ToolSet(
-            name="GitHub - Git Full Access",
-            description="A toolset for full access to GitHub Git repositories",
-            url="https://api.githubcopilot.com/mcp/x/git",
-            type=ToolType.MCP,
-            auth_required=True
+        logger.info(
+            "Default toolsets ready - Users must configure per-user credentials via PUT /tool/toolset/{id}/credential for authenticated toolsets"
         )
-        session.add(github_git_full_access_toolset)
-        await session.commit()
-        await session.refresh(github_git_full_access_toolset)
 
-        logger.info("Default GitHub - Git Full Access toolset created")
-    else:
-        logger.info("Default GitHub - Git Full Access toolset already exists")
-
-    _github_full_access_toolset_statement = select(ToolSet).where(
-        ToolSet.name == "GitHub Full Access",
-        ToolSet.url == "https://api.githubcopilot.com/mcp/",
-        ToolSet.type == ToolType.MCP,
-    )
-    github_full_access_toolset = (await session.exec(_github_full_access_toolset_statement)).first()
-    
-    if github_full_access_toolset is None:
-        logger.info("Creating default GitHub Full Access toolset")
-        github_full_access_toolset = ToolSet(
-            name="GitHub Full Access",
-            description="A toolset for full access to GitHub",
-            url="https://api.githubcopilot.com/mcp/",
-            type=ToolType.MCP,
-            auth_required=True
-        )
-        session.add(github_full_access_toolset)
-        await session.commit()
-        await session.refresh(github_full_access_toolset)
-
-        logger.info("Default GitHub Full Access toolset created")
-    else:
-        logger.info("Default GitHub Full Access toolset already exists")
-
-    logger.info(
-        "Default toolsets ready - Users must configure per-user credentials via PUT /tool/toolset/{id}/credential for authenticated toolsets"
-    )
-            
     logger.info("Startup Complete")
 
 api.include_router(auth_router)
