@@ -6,12 +6,18 @@ import re
 
 from pydantic import BaseModel, Field
 
+from lib.context import get_user_id
 from lib.tool import create_tool_registry
 
 Registry, tool = create_tool_registry("reporting")
 
 REPORTS_DIR = Path("/tmp/astro-reports")
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
+_USER_CONTEXT_ERROR = (
+    "Report storage requires an authenticated user context. "
+    "Reports are private to each user."
+)
 
 
 def _safe_name(value: str) -> str:
@@ -21,11 +27,26 @@ def _safe_name(value: str) -> str:
     return normalized or "report"
 
 
-def _report_path(name: str) -> Path:
+def _user_reports_dir(user_id: int) -> Path:
+    user_dir = REPORTS_DIR / str(user_id)
+    user_dir.mkdir(parents=True, exist_ok=True)
+    return user_dir
+
+
+def _report_path(name: str) -> Path | None:
+    user_id = get_user_id()
+    if user_id is None:
+        return None
+
     safe_name = _safe_name(name)
     if not safe_name.endswith(".md"):
         safe_name = f"{safe_name}.md"
-    return REPORTS_DIR / safe_name
+
+    base = _user_reports_dir(user_id).resolve()
+    path = (base / safe_name).resolve()
+    if not path.is_relative_to(base):
+        return None
+    return path
 
 
 class BuildReportInput(BaseModel):
@@ -109,6 +130,9 @@ async def build_markdown_report(input: BuildReportInput) -> dict:
 )
 async def save_report(input: SaveReportInput) -> dict:
     path = _report_path(input.name)
+    if path is None:
+        return {"saved": False, "error": _USER_CONTEXT_ERROR}
+
     if path.exists() and not input.overwrite:
         return {
             "saved": False,
@@ -128,6 +152,8 @@ async def save_report(input: SaveReportInput) -> dict:
 )
 async def get_report(input: GetReportInput) -> dict:
     path = _report_path(input.name)
+    if path is None:
+        return {"found": False, "error": _USER_CONTEXT_ERROR}
     if not path.exists():
         return {"found": False, "path": str(path), "error": "Report not found"}
 
@@ -143,6 +169,8 @@ async def get_report(input: GetReportInput) -> dict:
 )
 async def append_report_section(input: AppendSectionInput) -> dict:
     path = _report_path(input.name)
+    if path is None:
+        return {"updated": False, "error": _USER_CONTEXT_ERROR}
     if not path.exists():
         return {"updated": False, "path": str(path), "error": "Report not found"}
 
@@ -159,9 +187,14 @@ async def append_report_section(input: AppendSectionInput) -> dict:
     capabilities=["reporting"],
     version="1.0",
 )
-async def list_reports(input: ListReportsInput) -> list[dict]:
+async def list_reports(input: ListReportsInput) -> list[dict] | dict:
+    user_id = get_user_id()
+    if user_id is None:
+        return {"error": _USER_CONTEXT_ERROR}
+
+    user_dir = _user_reports_dir(user_id)
     report_files = sorted(
-        REPORTS_DIR.glob("*.md"),
+        user_dir.glob("*.md"),
         key=lambda report: report.stat().st_mtime,
         reverse=True,
     )[: max(1, input.limit)]

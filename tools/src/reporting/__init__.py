@@ -1,7 +1,8 @@
 import asyncio
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
+from lib.context import reset_user_id, set_user_id
 from lib.models import ToolsResponse, Tool, ExecTool, ExecResponse
 from src.reporting.tools import Registry
 
@@ -21,12 +22,14 @@ async def list_tools() -> ToolsResponse:
 )
 
 @reporting_router.post("/exec")
-async def exec_tool(exec: ExecTool):
+async def exec_tool(exec: ExecTool, request: Request):
     tool = Registry.get(exec.tool)
 
     if not tool:
         raise HTTPException(status_code=404, detail="Tool not found")
 
+    user_id = getattr(request.state, "user_id", None)
+    token = set_user_id(user_id)
     try:
         result = await asyncio.wait_for(
             tool.func(tool.input(**exec.arguments)),
@@ -34,9 +37,11 @@ async def exec_tool(exec: ExecTool):
         )
 
         return ExecResponse(result=result)
-    
+
     except Exception as e:
         return ExecResponse(
             result=None,
             error=str(e)
         )
+    finally:
+        reset_user_id(token)

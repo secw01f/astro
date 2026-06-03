@@ -134,6 +134,8 @@ async def build_agent_toolset_catalog(
                         f"configure it via PUT /tool/toolset/{toolset.id}/credential"
                     ),
                 )
-            haystack_tools.append(http_toolset_factory(toolset, db_tools, token=token))
+            haystack_tools.append(
+                http_toolset_factory(toolset, db_tools, token=token, user_id=user_id)
+            )
 
     return haystack_tools
