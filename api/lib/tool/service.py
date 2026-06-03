@@ -16,6 +16,7 @@ from src.db.models import (
     AgentToolLink,
     ToolSetToolLink,
     UserToolSetCredential,
+    Credential,
 )
 
 def validate_auth_fields(
@@ -126,6 +127,34 @@ async def delete_logical_toolset_links(session: AsyncSession, toolset_id: int) -
     for link in result.all():
         await session.delete(link)
 
+
+async def delete_toolset_user_credentials(session: AsyncSession, toolset_id: int) -> None:
+    statement = select(UserToolSetCredential).where(
+        UserToolSetCredential.toolset_id == toolset_id
+    )
+    result = await session.exec(statement)
+    rows = result.all()
+    credential_ids = [row.credential_id for row in rows]
+
+    for row in rows:
+        await session.delete(row)
+    await session.flush()
+
+    for credential_id in credential_ids:
+        other_links = await session.exec(
+            select(UserToolSetCredential).where(
+                UserToolSetCredential.credential_id == credential_id
+            )
+        )
+        if other_links.first() is not None:
+            continue
+        credential = await session.get(Credential, credential_id)
+        if credential is not None:
+            await session.delete(credential)
+
+    await session.flush()
+
+
 async def delete_toolset_record(session: AsyncSession, toolset: ToolSet) -> None:
     statement = select(AgentToolSetLink).where(AgentToolSetLink.toolset_id == toolset.id)
     result = await session.exec(statement)
@@ -145,10 +174,7 @@ async def delete_toolset_record(session: AsyncSession, toolset: ToolSet) -> None
                 await session.delete(link)
         await delete_toolset_tools(session, toolset.id)
 
-    statement = select(UserToolSetCredential).where(UserToolSetCredential.toolset_id == toolset.id)
-    result = await session.exec(statement)
-    for link in result.all():
-        await session.delete(link)
-
+    await delete_toolset_user_credentials(session, toolset.id)
+    await session.flush()
     await session.delete(toolset)
     await session.commit()
