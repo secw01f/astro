@@ -56,6 +56,14 @@ async def verify_shared_secret(request: Request, call_next):
                 status_code=401,
                 content={"detail": "Invalid or missing request signature"},
             )
+        user_header = request.headers.get("X-Astro-User-Id")
+        if user_header:
+            try:
+                user_id = int(user_header)
+                if user_id > 0:
+                    request.state.user_id = user_id
+            except ValueError:
+                pass
     return await call_next(request)
 
 @api.on_event("startup")

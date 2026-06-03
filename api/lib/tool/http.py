@@ -22,6 +22,7 @@ class HttpToolInvoker:
         auth_type: AuthType | None = None,
         token: str | None = None,
         header: str | None = None,
+        user_id: int | None = None,
     ) -> None:
         self.base_url = base_url
         self.remote_name = remote_name
@@ -29,6 +30,7 @@ class HttpToolInvoker:
         self.auth_type = auth_type
         self.token = token
         self.header = header
+        self.user_id = user_id
 
     def __call__(self, **kwargs: Any) -> Any:
         with httpx.Client(timeout=15.0) as client:
@@ -44,6 +46,7 @@ class HttpToolInvoker:
                     auth_type=self.auth_type,
                     token=self.token,
                     header=self.header,
+                    user_id=self.user_id,
                 ),
             )
             response.raise_for_status()
@@ -55,7 +58,7 @@ class HttpToolInvoker:
             return result
 
 
-def _signed_headers(method: str, url: str) -> dict[str, str]:
+def _signed_headers(method: str, url: str, user_id: int | None = None) -> dict[str, str]:
     timestamp = str(int(time.time()))
     parsed = urlparse(url)
     path = parsed.path or "/"
@@ -65,10 +68,13 @@ def _signed_headers(method: str, url: str) -> dict[str, str]:
         message,
         hashlib.sha256,
     ).hexdigest()
-    return {
+    headers = {
         "X-Astro-Timestamp": timestamp,
         "X-Astro-Signature": signature,
     }
+    if user_id is not None:
+        headers["X-Astro-User-Id"] = str(user_id)
+    return headers
 
 
 def _auth_headers(
@@ -96,6 +102,7 @@ def _request_headers(
     auth_type: AuthType | None = None,
     token: str | None = None,
     header: str | None = None,
+    user_id: int | None = None,
 ) -> dict[str, str]:
     explicit_auth_headers = _auth_headers(
         auth_required=auth_required,
@@ -105,7 +112,7 @@ def _request_headers(
     )
     if explicit_auth_headers:
         return explicit_auth_headers
-    return _signed_headers(method, url)
+    return _signed_headers(method, url, user_id=user_id)
 
 class HttpProxyToolset(Toolset):
     """
@@ -121,6 +128,7 @@ class HttpProxyToolset(Toolset):
         auth_type: AuthType | None = None,
         token: str | None = None,
         header: str | None = None,
+        user_id: int | None = None,
     ) -> None:
         if auth_required and not token:
             raise ValueError("Authenticated HTTP toolsets require a credential token at initialization")
@@ -133,6 +141,7 @@ class HttpProxyToolset(Toolset):
         self.auth_type = auth_type
         self.token = token
         self.header = header
+        self.user_id = user_id
         super().__init__(tools=self._build_tools())
 
     def _build_tools(self) -> list[Tool]:
@@ -156,6 +165,7 @@ class HttpProxyToolset(Toolset):
                         auth_type=self.auth_type,
                         token=self.token,
                         header=self.header,
+                        user_id=self.user_id,
                     ),
                 )
             )
@@ -178,6 +188,7 @@ class HttpProxyToolset(Toolset):
                 "auth_type": self.auth_type.value if self.auth_type else None,
                 "token": self.token,
                 "header": self.header,
+                "user_id": self.user_id,
             },
         }
 
@@ -191,9 +202,16 @@ class HttpProxyToolset(Toolset):
             auth_type=AuthType(inner["auth_type"]) if inner.get("auth_type") else None,
             token=inner.get("token"),
             header=inner.get("header"),
+            user_id=inner.get("user_id"),
         )
 
-def http_toolset_factory(db_toolset, db_tools, token: str | None = None) -> HttpProxyToolset:
+def http_toolset_factory(
+    db_toolset,
+    db_tools,
+    token: str | None = None,
+    *,
+    user_id: int | None = None,
+) -> HttpProxyToolset:
     if db_toolset.auth_required and not token:
         raise ValueError(f"Toolset {db_toolset.id} requires credentials but no token was provided")
 
@@ -215,6 +233,7 @@ def http_toolset_factory(db_toolset, db_tools, token: str | None = None) -> Http
         auth_type=db_toolset.auth_type,
         token=token,
         header=getattr(db_toolset, "header", None),
+        user_id=user_id,
     )
 
 async def get_tools(
