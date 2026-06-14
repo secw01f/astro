@@ -13,6 +13,8 @@ services:
         condition: service_started
       redis:
         condition: service_started
+    env_file:
+      - .env
     entrypoint: ["/bin/bash", "entrypoint.sh"]
     volumes:
       - specs:/api/specs
@@ -23,6 +25,8 @@ services:
       context: .
       dockerfile: Dockerfile
       target: tools
+    env_file:
+      - .env
     ports:
       - "7001:7001"
     entrypoint: ["/bin/bash", "entrypoint.sh"]
