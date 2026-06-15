@@ -2,8 +2,7 @@ import asyncio
 import hashlib
 import json
 import logging
-import pickle
-import threading
+import random
 import time
 
 from typing import Any
@@ -100,10 +99,11 @@ def _normalize_for_cache(value: Any) -> Any:
     return repr(value)
 
 
-def _cache_key(provider: str, model: str, payload: dict[str, Any]) -> str:
+def _cache_key(provider: str, model: str, user_id: int | None, payload: dict[str, Any]) -> str:
     normalized = {
         "provider": provider,
         "model": model,
+        "user_id": user_id,
         "payload": _normalize_for_cache(payload),
     }
     digest = hashlib.sha256(json.dumps(normalized, sort_keys=True, default=str).encode("utf-8")).hexdigest()
@@ -112,11 +112,7 @@ def _cache_key(provider: str, model: str, payload: dict[str, Any]) -> str:
 
 class RedisTokenBucketLimiter:
     def __init__(self) -> None:
-        self._redis: Redis | None = None
         self._script_sha: str | None = None
-        # threading.Lock: module singleton is used across asyncio.run() / threads;
-        # asyncio.Lock is bound to one event loop and breaks under asyncio.to_thread.
-        self._lock = threading.Lock()
 
     async def _get_redis(self) -> Redis | None:
         if not settings.LLM_LIMITER_ENABLED:
@@ -124,37 +120,35 @@ class RedisTokenBucketLimiter:
         if not settings.REDIS_URL:
             logger.warning("LLM limiter enabled but REDIS_URL is not set; limiter is bypassed")
             return None
-        if self._redis is not None:
-            return self._redis
-        with self._lock:
-            if self._redis is None:
-                self._redis = Redis.from_url(settings.REDIS_URL, decode_responses=True)
-            return self._redis
+        return Redis.from_url(settings.REDIS_URL, decode_responses=True)
 
     async def _eval_bucket(self, key: str, requested_tokens: int) -> tuple[bool, int]:
         redis = await self._get_redis()
         if redis is None:
             return True, 0
 
-        capacity = float(settings.LLM_TOKEN_LIMIT_PER_MINUTE)
-        refill_per_ms = capacity / 60000.0
-        now_ms = int(time.time() * 1000)
-        args = [capacity, refill_per_ms, now_ms, float(requested_tokens)]
-
         try:
+            capacity = float(settings.LLM_TOKEN_LIMIT_PER_MINUTE)
+            refill_per_ms = capacity / 60000.0
+            now_ms = int(time.time() * 1000)
+            args = [capacity, refill_per_ms, now_ms, float(requested_tokens)]
+
             if self._script_sha is None:
                 self._script_sha = await redis.script_load(_TOKEN_BUCKET_LUA)
-            result = await redis.evalsha(self._script_sha, 1, key, *args)
-        except Exception:
-            # Reload once in case Redis script cache was flushed.
-            self._script_sha = await redis.script_load(_TOKEN_BUCKET_LUA)
-            result = await redis.evalsha(self._script_sha, 1, key, *args)
+            try:
+                result = await redis.evalsha(self._script_sha, 1, key, *args)
+            except Exception:
+                # Reload once in case Redis script cache was flushed.
+                self._script_sha = await redis.script_load(_TOKEN_BUCKET_LUA)
+                result = await redis.evalsha(self._script_sha, 1, key, *args)
+        finally:
+            await redis.aclose()
 
         allowed = int(result[0]) == 1
         wait_ms = int(result[1])
         return allowed, wait_ms
 
-    async def acquire(self, provider: str, model: str, payload: dict[str, Any]) -> None:
+    async def acquire(self, provider: str, model: str, user_id: int | None, payload: dict[str, Any]) -> None:
         if not settings.LLM_LIMITER_ENABLED:
             return
         requested_tokens = _estimate_requested_tokens(payload)
@@ -167,58 +161,65 @@ class RedisTokenBucketLimiter:
                 capacity,
             )
             requested_tokens = capacity
-        scope = json.dumps({"provider": provider, "model": model}, sort_keys=True)
+        scope = json.dumps({"provider": provider, "model": model, "user_id": user_id}, sort_keys=True)
         scope_hash = hashlib.sha1(scope.encode("utf-8")).hexdigest()
         key = f"llm:bucket:{scope_hash}"
+        deadline = time.monotonic() + settings.LLM_LIMITER_MAX_WAIT_SECONDS
 
         while True:
             allowed, wait_ms = await self._eval_bucket(key, requested_tokens)
             if allowed:
                 return
-            sleep_ms = max(wait_ms, settings.LLM_LIMITER_POLL_INTERVAL_MS)
+            if time.monotonic() >= deadline:
+                raise RuntimeError("LLM rate limiter wait timed out")
+            jitter_ms = random.randint(0, settings.LLM_LIMITER_POLL_INTERVAL_MS)
+            sleep_ms = max(wait_ms, settings.LLM_LIMITER_POLL_INTERVAL_MS) + jitter_ms
             await asyncio.sleep(sleep_ms / 1000.0)
 
 
 class RedisPromptCache:
-    def __init__(self) -> None:
-        self._redis: Redis | None = None
-        self._lock = threading.Lock()
-
     async def _get_redis(self) -> Redis | None:
         if not settings.LLM_PROMPT_CACHE_ENABLED:
             return None
         if not settings.REDIS_URL:
             logger.warning("LLM prompt cache enabled but REDIS_URL is not set; cache is bypassed")
             return None
-        if self._redis is not None:
-            return self._redis
-        with self._lock:
-            if self._redis is None:
-                self._redis = Redis.from_url(settings.REDIS_URL, decode_responses=False)
-            return self._redis
+        return Redis.from_url(settings.REDIS_URL, decode_responses=False)
 
-    async def get(self, provider: str, model: str, payload: dict[str, Any]) -> Any | None:
+    async def get(self, provider: str, model: str, user_id: int | None, payload: dict[str, Any]) -> Any | None:
         redis = await self._get_redis()
         if redis is None:
             return None
-        key = _cache_key(provider, model, payload)
-        blob = await redis.get(key)
-        if not blob:
-            return None
         try:
-            return pickle.loads(blob)
+            key = _cache_key(provider, model, user_id, payload)
+            blob = await redis.get(key)
+            if not blob:
+                return None
+            if isinstance(blob, bytes):
+                blob = blob.decode("utf-8")
+            return json.loads(blob)
         except Exception:
             logger.warning("Failed to deserialize cached LLM response; evicting key")
             await redis.delete(key)
             return None
+        finally:
+            await redis.aclose()
 
-    async def set(self, provider: str, model: str, payload: dict[str, Any], response: Any) -> None:
+    async def set(self, provider: str, model: str, user_id: int | None, payload: dict[str, Any], response: Any) -> None:
         redis = await self._get_redis()
         if redis is None:
             return
-        key = _cache_key(provider, model, payload)
-        blob = pickle.dumps(response)
-        await redis.set(key, blob, ex=settings.LLM_PROMPT_CACHE_TTL_SECONDS)
+        try:
+            blob = json.dumps(response).encode("utf-8")
+        except TypeError:
+            logger.debug("LLM response is not JSON-serializable; skipping prompt cache")
+            await redis.aclose()
+            return
+        try:
+            key = _cache_key(provider, model, user_id, payload)
+            await redis.set(key, blob, ex=settings.LLM_PROMPT_CACHE_TTL_SECONDS)
+        finally:
+            await redis.aclose()
 
 
 class RateLimitedChatGenerator:
@@ -228,23 +229,25 @@ class RateLimitedChatGenerator:
         model: str,
         generator: Any,
         limiter: RedisTokenBucketLimiter,
+        user_id: int | None = None,
         cache: RedisPromptCache | None = None,
     ) -> None:
         self._provider = provider
         self._model = model
         self._generator = generator
         self._limiter = limiter
+        self._user_id = user_id
         self._cache = cache
 
     async def _cached_get(self, payload: dict[str, Any]) -> Any | None:
         if self._cache is None:
             return None
-        return await self._cache.get(self._provider, self._model, payload)
+        return await self._cache.get(self._provider, self._model, self._user_id, payload)
 
     async def _cached_set(self, payload: dict[str, Any], response: Any) -> None:
         if self._cache is None:
             return
-        await self._cache.set(self._provider, self._model, payload, response)
+        await self._cache.set(self._provider, self._model, self._user_id, payload, response)
 
     async def run_async(self, messages, tools=None, **kwargs):
         payload = dict(kwargs)
@@ -255,7 +258,7 @@ class RateLimitedChatGenerator:
             cached = await self._cached_get(payload)
             if cached is not None:
                 return cached
-        await self._limiter.acquire(self._provider, self._model, payload)
+        await self._limiter.acquire(self._provider, self._model, self._user_id, payload)
         response = await self._generator.run_async(messages=messages, tools=tools, **kwargs)
         if use_cache:
             await self._cached_set(payload, response)
@@ -274,7 +277,7 @@ class RateLimitedChatGenerator:
                 cached = asyncio.run(self._cached_get(payload))
                 if cached is not None:
                     return cached
-            asyncio.run(self._limiter.acquire(self._provider, self._model, payload))
+            asyncio.run(self._limiter.acquire(self._provider, self._model, self._user_id, payload))
         response = self._generator.run(messages=messages, tools=tools, **kwargs)
         try:
             asyncio.get_running_loop()

@@ -10,6 +10,49 @@ if ! command -v python3 &> /dev/null; then
   exit 1
 fi
 
+if [ ! -f .env ]; then
+  echo "Generating .env with strong local secrets..."
+  umask 077
+  python3 - <<'PY'
+import secrets
+from pathlib import Path
+
+postgres_user = "astro"
+postgres_db = "astro"
+postgres_password = secrets.token_urlsafe(32)
+redis_password = secrets.token_urlsafe(32)
+
+env = f"""JWT_SECRET_KEY={secrets.token_urlsafe(48)}
+CREDENTIAL_ENCRYPTION_KEY={secrets.token_urlsafe(48)}
+TOOLS_HMAC_SECRET={secrets.token_urlsafe(48)}
+DEFAULT_TOOLS_BASE_URL=http://tools:7001
+POSTGRES_USER={postgres_user}
+POSTGRES_PASSWORD={postgres_password}
+POSTGRES_DB={postgres_db}
+DB_URL=postgresql+asyncpg://{postgres_user}:{postgres_password}@db:5432/{postgres_db}
+REDIS_PASSWORD={redis_password}
+REDIS_URL=redis://:{redis_password}@redis:6379
+LLM_LIMITER_ENABLED=false
+LLM_TOKEN_LIMIT_PER_MINUTE=30000
+LLM_LIMITER_POLL_INTERVAL_MS=200
+LLM_LIMITER_DEFAULT_OUTPUT_TOKENS=1024
+LLM_LIMITER_MAX_WAIT_SECONDS=60
+LLM_PROMPT_CACHE_ENABLED=false
+LLM_PROMPT_CACHE_TTL_SECONDS=300
+MEMORY_RECALL_MAX_ITEMS=5
+MEMORY_LIST_MAX_ITEMS=10
+MEMORY_ITEM_MAX_CHARS=400
+TOOL_OUTPUT_MAX_CHARS=2000
+MAX_UPLOAD_BYTES=10485760
+OUTBOUND_ALLOWLIST=
+DEFAULT_EXP_MINUTES=30
+ENV=dev
+"""
+Path(".env").write_text(env)
+Path(".env").chmod(0o600)
+PY
+fi
+
 echo "Starting Docker services..."
 docker compose up -d --build
 
@@ -42,7 +85,9 @@ fi
 
 echo "Retrieving stack bootstrap user file..."
 if docker compose exec -T api sh -c 'test -f /api/stack_user.json'; then
-  docker compose exec -T api sh -c 'cat /api/stack_user.json'
+  echo "Bootstrap credentials exist in the api container."
+  echo "Reveal them locally only when ready to complete first login:"
+  echo "   docker compose exec -T api sh -c 'cat /api/stack_user.json'"
 else
   echo "stack_user.json not found in api container (it may be consumed already)."
 fi

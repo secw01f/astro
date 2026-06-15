@@ -13,7 +13,7 @@ from settings import settings
 _limiter = RedisTokenBucketLimiter()
 _cache = RedisPromptCache()
 
-def chat_generator(provider: Provider, model: str, key: str, key_id: Optional[str] = None, region: Optional[str] = None, max_tokens: Optional[int] = None):
+def chat_generator(provider: Provider, model: str, key: str, key_id: Optional[str] = None, region: Optional[str] = None, max_tokens: Optional[int] = None, user_id: int | None = None):
     if max_tokens is not None and provider.value == "bedrock":
         generation_kwargs = {"maxTokens": max_tokens}
     elif max_tokens is not None:
@@ -49,5 +49,5 @@ def chat_generator(provider: Provider, model: str, key: str, key_id: Optional[st
         raise ValueError(f"Unsupported LLM provider: {provider}")
 
     if settings.LLM_LIMITER_ENABLED or settings.LLM_PROMPT_CACHE_ENABLED:
-        return RateLimitedChatGenerator(provider.value, model, generator, _limiter, cache=_cache)
+        return RateLimitedChatGenerator(provider.value, model, generator, _limiter, user_id=user_id, cache=_cache)
     return generator

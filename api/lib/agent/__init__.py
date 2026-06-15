@@ -10,20 +10,6 @@ from haystack.tools import ComponentTool, Tool, Toolset
 from haystack.components.tools import ToolInvoker
 
 _agent_logger = logging.getLogger("haystack.components.agents.agent")
-_RETRY_MAX_ATTEMPTS = 3
-_RETRY_SLEEP_SECONDS = 60
-
-
-def _is_retryable_error(exc: Exception) -> bool:
-    message = str(exc).lower()
-    return (
-        "rate_limit" in message
-        or "rate limit" in message
-        or "429" in message
-        or "connection error" in message
-        or "timed out" in message
-        or "timeout" in message
-    )
 
 _TOOL_STREAM_PREVIEW_CHARS = 2000
 
@@ -197,8 +183,6 @@ class SupervisorAgent(Agent):
     def register_supporting_agent(self, agent):
         if not isinstance(agent, SupportingAgent):
             raise TypeError(f"Expected a SupportingAgent but got {type(agent).__name__}.")
-        else:
-            agent
         self.tools.append(agent.component_tool)
         self._tool_invoker = ToolInvoker(
             tools=self.tools,
@@ -240,35 +224,11 @@ class SupportingAgent(Agent):
 
     def run(self, *args, **kwargs):
         args, kwargs = self._args_kwargs_for_agent_run(args, kwargs)
-        for attempt in range(1, _RETRY_MAX_ATTEMPTS + 1):
-            try:
-                return super().run(*args, **kwargs)
-            except Exception as e:
-                if _is_retryable_error(e) and attempt < _RETRY_MAX_ATTEMPTS:
-                    _agent_logger.warning(
-                        f"Supporting agent '{self._agent_name}' failed with a retryable error "
-                        f"(attempt {attempt}/{_RETRY_MAX_ATTEMPTS}): {e}. "
-                        f"Sleeping {_RETRY_SLEEP_SECONDS} seconds."
-                    )
-                    time.sleep(_RETRY_SLEEP_SECONDS)
-                    continue
-                raise
+        return super().run(*args, **kwargs)
 
     async def run_async(self, *args, **kwargs):
         args, kwargs = self._args_kwargs_for_agent_run(args, kwargs)
-        for attempt in range(1, _RETRY_MAX_ATTEMPTS + 1):
-            try:
-                return await super().run_async(*args, **kwargs)
-            except Exception as e:
-                if _is_retryable_error(e) and attempt < _RETRY_MAX_ATTEMPTS:
-                    _agent_logger.warning(
-                        f"Supporting agent '{self._agent_name}' failed with a retryable error "
-                        f"(attempt {attempt}/{_RETRY_MAX_ATTEMPTS}): {e}. "
-                        f"Sleeping {_RETRY_SLEEP_SECONDS} seconds."
-                    )
-                    await asyncio.sleep(_RETRY_SLEEP_SECONDS)
-                    continue
-                raise
+        return await super().run_async(*args, **kwargs)
 
     @property
     def component_tool(self):

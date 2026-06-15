@@ -1,6 +1,6 @@
 import typer
 import jinja2
-import pathlib
+from pathlib import Path
 
 from typing import Annotated
 
@@ -14,13 +14,12 @@ def create(name: Annotated[str, typer.Option(default=...)], protected: Annotated
     env = jinja2.Environment(loader=loader)
     template = env.get_template("router.py.j2")
     router = template.render(name=name, protected=protected)
-    output = str(router_dir + f"{name}.py")
+    output = router_dir / f"{name}.py"
 
     try:
-        with open(output, "w") as file:
+        with output.open("w") as file:
             file.write(router)
-            file.close()
     
         print(f"The {name} router has been created.")
-    except:
+    except OSError:
         print(f"The {name} router failed to create.")

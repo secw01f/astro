@@ -36,7 +36,9 @@ from lib.tool.service import (
     replace_mcp_toolset_tools,
     replace_logical_toolset_members,
     delete_toolset_record,
+    delete_toolset_user_credentials,
 )
+from lib.security.network import validate_outbound_url_async
 
 tool_router = APIRouter(prefix="/tool", dependencies=[Depends(verify_token)])
 logger = logging.getLogger(__name__)
@@ -93,6 +95,7 @@ async def update_toolset(
     sync_tools = updates.pop("sync_tools", None)
     mcp_tools = updates.pop("tools", None)
     logical_tool_ids = updates.pop("tool_ids", None)
+    old_endpoint = (toolset.url, toolset.auth_required, toolset.auth_type, toolset.header)
 
     if toolset.type == ToolType.LOGICAL:
         for key in ("url", "auth_required", "auth_type", "header"):
@@ -108,6 +111,11 @@ async def update_toolset(
 
     if toolset.type != ToolType.LOGICAL:
         validate_auth_fields(toolset.auth_required, toolset.auth_type, toolset.header)
+        if toolset.url:
+            await validate_outbound_url_async(toolset.url)
+        new_endpoint = (toolset.url, toolset.auth_required, toolset.auth_type, toolset.header)
+        if new_endpoint != old_endpoint:
+            await delete_toolset_user_credentials(session, toolset.id)
 
     if toolset.type == ToolType.HTTP and sync_tools:
         await sync_http_toolset_tools(session, toolset, user_id)
@@ -146,6 +154,7 @@ async def create_mcp_toolset(
     owner_id = resolve_toolset_owner(bool(toolset.shared), user_id, role)
 
     validate_auth_fields(toolset.auth_required or False, toolset.auth_type, toolset.header)
+    await validate_outbound_url_async(toolset.url)
     if owner_id is None and toolset.token:
         raise HTTPException(
             status_code=400,
@@ -184,6 +193,7 @@ async def create_http_toolset(
     owner_id = resolve_toolset_owner(bool(toolset.shared), user_id, role)
 
     validate_auth_fields(toolset.auth_required or False, toolset.auth_type, toolset.header)
+    await validate_outbound_url_async(toolset.url)
     if owner_id is None and toolset.token:
         raise HTTPException(
             status_code=400,

@@ -5,11 +5,16 @@ from sqlalchemy.orm import selectinload
 from sqlmodel import select
 
 from src.db.db import session_dep
-from src.db.models import Agent, AgentPublic, Prompt, Tool
+from src.db.models import Agent, AgentPublic, LLM, Prompt, Tool
 from lib.auth.auth import verify_token
 
 from lib.agent.enums import AgentRole
-from lib.agent.models import CreateAgent, UpdateAgent, UpdatePrompt
+from lib.agent.models import (
+    CreateAgent,
+    UpdateAgent,
+    UpdatePrompt,
+    validate_agent_configuration,
+)
 from lib.tool import validate_toolsets_ready_for_agent, validate_tools_ready_for_agent
 from lib.tool.access import (
     claims_from_request,
@@ -45,6 +50,27 @@ async def get_all_agents(request: Request, session: session_dep) -> dict[str, li
     result = await session.exec(statement)
     agents = result.all()
     return {"agents": [AgentPublic.model_validate(agent) for agent in agents]}
+
+@agent_router.get("/prompts")
+async def get_prebuilt_prompts(session: session_dep) -> dict[str, list[Prompt]]:
+    stmt = select(Prompt)
+    result = await session.exec(stmt)
+    prompts = result.all()
+    return {"prompts": [Prompt.model_validate(prompt) for prompt in prompts]}
+
+@agent_router.patch("/prompt/{id}")
+async def update_prebuilt_prompt(id: int, body: UpdatePrompt, session: session_dep) -> dict[str, Prompt]:
+    stmt = select(Prompt).where(Prompt.id == id)
+    result = await session.exec(stmt)
+    prompt = result.first()
+    if not prompt:
+        raise HTTPException(status_code=404, detail="Prompt not found")
+    prompt.prompt = body.prompt
+    session.add(prompt)
+    await session.flush()
+    await session.commit()
+    await session.refresh(prompt)
+    return {"prompt": Prompt.model_validate(prompt)}
 
 @agent_router.get("/{id}")
 async def get_agent_by_id(request: Request, id: int, session: session_dep) -> dict[str, AgentPublic]:
@@ -92,7 +118,11 @@ async def update_agent(request: Request, id: int, body: UpdateAgent, session: se
     if "type" in updates:
         agent.agent_type = updates.pop("type")
     if "llm" in updates:
-        agent.llm_id = updates.pop("llm")
+        llm_id = updates.pop("llm")
+        llm = await session.get(LLM, llm_id)
+        if llm is None or llm.user_id != user_id:
+            raise HTTPException(status_code=404, detail="LLM not found")
+        agent.llm_id = llm_id
     toolset_ids = updates.pop("toolset_ids", None)
     tool_ids = updates.pop("tool_ids", None)
     for key, value in updates.items():
@@ -114,13 +144,23 @@ async def update_agent(request: Request, id: int, body: UpdateAgent, session: se
             await validate_tools_ready_for_agent(session, user_id, tools)
             agent.tools = tools
 
+    try:
+        validate_agent_configuration(
+            agent.agent_type,
+            agent.role,
+            [toolset.id for toolset in agent.toolsets or [] if toolset.id is not None],
+            [tool.id for tool in agent.tools or [] if tool.id is not None],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     session.add(agent)
     await session.flush()
     await session.commit()
 
     loaded_stmt = (
         select(Agent)
-        .where(Agent.id == agent.id)
+        .where(Agent.id == agent.id, Agent.user_id == user_id)
         .options(*_AGENT_LOAD_OPTIONS)
     )
     loaded = (await session.exec(loaded_stmt)).one()
@@ -134,6 +174,10 @@ async def create_agent(request: Request, agent: CreateAgent, session: session_de
         raise HTTPException(status_code=401, detail="Missing JWT claims on request")
 
     user_id = claims["id"]
+
+    llm = await session.get(LLM, agent.llm)
+    if llm is None or llm.user_id != user_id:
+        raise HTTPException(status_code=404, detail="LLM not found")
 
     system_prompt = agent.system_prompt
     if system_prompt is None and agent.role not in (
@@ -174,7 +218,7 @@ async def create_agent(request: Request, agent: CreateAgent, session: session_de
 
     loaded_stmt = (
         select(Agent)
-        .where(Agent.id == new_agent.id)
+        .where(Agent.id == new_agent.id, Agent.user_id == user_id)
         .options(*_AGENT_LOAD_OPTIONS)
     )
     loaded = (await session.exec(loaded_stmt)).one()
@@ -200,23 +244,3 @@ async def delete_agent(request: Request, id: int, session: session_dep) -> dict[
     await session.commit()
 
     return {"message": "Agent deleted successfully"}
-
-@agent_router.get("/prompts")
-async def get_prebuilt_prompts(session: session_dep) -> dict[str, list[str]]:
-    stmt = select(Prompt)
-    result = await session.exec(stmt)
-    prompts = result.all()
-    return {"prompts": [Prompt.model_validate(prompt) for prompt in prompts]}
-
-@agent_router.patch("/prompt/{id}")
-async def update_prebuilt_prompt(prompt: UpdatePrompt, session: session_dep) -> dict[str, Prompt]:
-    stmt = select(Prompt).where(Prompt.id == id)
-    result = await session.exec(stmt)
-    prompt = result.first()
-    if not prompt:
-        raise HTTPException(status_code=404, detail="Prompt not found")
-    prompt.prompt = prompt.prompt
-    session.add(prompt)
-    await session.flush()
-    await session.commit()
-    return {"prompt": Prompt.model_validate(prompt)}

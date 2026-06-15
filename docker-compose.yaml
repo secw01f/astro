@@ -4,6 +4,9 @@ services:
       context: .
       dockerfile: Dockerfile
       target: api
+    env_file:
+      - path: .env
+        required: false
     ports:
       - "8000:8000"
     depends_on:
@@ -23,28 +26,38 @@ services:
       context: .
       dockerfile: Dockerfile
       target: tools
-    ports:
-      - "7001:7001"
+    env_file:
+      - path: .env
+        required: false
+    expose:
+      - "7001"
     entrypoint: ["/bin/bash", "entrypoint.sh"]
 
   db:
     image: pgvector/pgvector:pg16
+    env_file:
+      - path: .env
+        required: false
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: postgres
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - dbdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\""]
       interval: 5s
       timeout: 5s
       retries: 5
 
   redis:
     image: redis:7
+    env_file:
+      - path: .env
+        required: false
+    command: ["sh", "-c", "redis-server --requirepass \"$${REDIS_PASSWORD}\""]
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping"]
       interval: 5s
       timeout: 3s
       retries: 5

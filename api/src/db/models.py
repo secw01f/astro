@@ -33,6 +33,7 @@ class User(UserBase, table=True):
     password: str
     role: Role = Field(default=Role.USER)
     enabled: bool | None= Field(default=True)
+    token_version: int = Field(default=0)
     created: datetime = Field(default_factory=datetime.utcnow)
     agents: List["Agent"] | None = Relationship(back_populates="user")
     stacks: List["Stack"] | None = Relationship(back_populates="user")
@@ -265,8 +266,9 @@ class ToolSet(ToolSetBase, table=True):
     created: datetime = Field(default_factory=datetime.utcnow)
 
     @model_validator(mode="before")
-    def validate_auth_type(self, data: Any) -> Any:
-        if self.auth_required and self.auth_type is None:
+    @classmethod
+    def validate_auth_type(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("auth_required") and data.get("auth_type") is None:
             raise ValueError("An authentication type is required for an authenticated toolset")
         return data
 
@@ -319,6 +321,7 @@ class CredentialBase(SQLModel):
 class Credential(CredentialBase, table=True):
     id: int | None = Field(default=None, primary_key=True)
     user_id: Optional[int] | None = Field(default=None, foreign_key="user.id")
+    crypto_version: int = Field(default=2)
     user: Optional["User"] = Relationship(back_populates="credentials")
     created: datetime = Field(default_factory=datetime.utcnow)
 

@@ -1,28 +1,55 @@
 import asyncio
+import json
+
 import httpx
 
 from pydantic import BaseModel
 from lib.tool import create_tool_registry
+from lib.security import block_reason_for_url
 
 from duckduckgo_api_haystack import DuckduckgoApiWebSearch
 
 Registry, tool = create_tool_registry("web")
 
 REQUEST_TIMEOUT_SECONDS = 30.0
-
-BLACKLISTED_DOMAINS = ["localhost", "127.0.0.1", "169.254.169.254"]
+MAX_RESPONSE_TEXT_CHARS = 20000
 
 def _error_response(error: str, url: str) -> dict:
     return {"error": error, "url": url}
 
+
+def _truncate_text(text: str, limit: int = MAX_RESPONSE_TEXT_CHARS) -> tuple[str, bool]:
+    if len(text) <= limit:
+        return text, False
+    return text[:limit].rstrip() + "... [truncated]", True
+
+
+def _url_block_reason(url: str) -> str | None:
+    return block_reason_for_url(url)
+
+
+async def _validate_url(url: str) -> dict | None:
+    reason = await asyncio.to_thread(_url_block_reason, url)
+    if reason is not None:
+        return _error_response(reason, url)
+    return None
+
+
 def _format_response(response: httpx.Response) -> dict:
+    text, truncated = _truncate_text(response.text)
     try:
-        return response.json()
+        parsed = json.loads(text)
+        if truncated and isinstance(parsed, dict):
+            return {**parsed, "truncated": True}
+        return parsed
     except ValueError:
-        return {
+        payload = {
             "status_code": response.status_code,
-            "content": response.text,
+            "content": text,
         }
+        if truncated:
+            payload["truncated"] = True
+        return payload
 
 class GetInput(BaseModel):
     url: str
@@ -47,8 +74,9 @@ class DeleteInput(BaseModel):
 
 @tool(name="get", description="Get from a URL", capabilities=["get"], version="1.0")
 async def get(input: GetInput) -> dict:
-    if any(domain in input.url for domain in BLACKLISTED_DOMAINS):
-        return _error_response("Execution Blocked", input.url)
+    blocked = await _validate_url(input.url)
+    if blocked:
+        return blocked
 
     try:
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
@@ -61,8 +89,9 @@ async def get(input: GetInput) -> dict:
 
 @tool(name="post", description="Post to a URL", capabilities=["post"], version="1.0")
 async def post(input: PostInput) -> dict:
-    if any(domain in input.url for domain in BLACKLISTED_DOMAINS):
-        return _error_response("Execution Blocked", input.url)
+    blocked = await _validate_url(input.url)
+    if blocked:
+        return blocked
 
     if input.json is not None and input.form is not None:
         return {
@@ -84,8 +113,9 @@ async def post(input: PostInput) -> dict:
 
 @tool(name="put", description="Put to a URL", capabilities=["put"], version="1.0")
 async def put(input: PutInput) -> dict:
-    if any(domain in input.url for domain in BLACKLISTED_DOMAINS):
-        return _error_response("Execution Blocked", input.url)
+    blocked = await _validate_url(input.url)
+    if blocked:
+        return blocked
 
     if input.json is not None and input.form is not None:
         return {
@@ -107,8 +137,9 @@ async def put(input: PutInput) -> dict:
 
 @tool(name="patch", description="Patch to a URL", capabilities=["patch"], version="1.0")
 async def patch(input: PatchInput) -> dict:
-    if any(domain in input.url for domain in BLACKLISTED_DOMAINS):
-        return _error_response("Execution Blocked", input.url)
+    blocked = await _validate_url(input.url)
+    if blocked:
+        return blocked
 
     if input.json is not None and input.form is not None:
         return {
@@ -130,8 +161,9 @@ async def patch(input: PatchInput) -> dict:
 
 @tool(name="delete", description="Delete from a URL", capabilities=["delete"], version="1.0")
 async def delete(input: DeleteInput) -> dict:
-    if any(domain in input.url for domain in BLACKLISTED_DOMAINS):
-        return _error_response("Execution Blocked", input.url)
+    blocked = await _validate_url(input.url)
+    if blocked:
+        return blocked
 
     try:
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:

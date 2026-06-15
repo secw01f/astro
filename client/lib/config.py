@@ -19,9 +19,12 @@ def load_config() -> dict:
     return data
 
 def save_config(config: dict) -> None:
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    with open(CONFIG_FILE, "w") as f:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(CONFIG_DIR, 0o700)
+    fd = os.open(CONFIG_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
         json.dump(config, f, indent=4)
+    os.chmod(CONFIG_FILE, 0o600)
 
 def ensure_config_file() -> dict:
     if CONFIG_FILE.exists():

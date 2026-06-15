@@ -35,6 +35,24 @@ _SUPPORTING_ROLES = frozenset(
 )
 
 
+def validate_agent_configuration(
+    agent_type: AgentType,
+    role: AgentRole,
+    toolset_ids: list[int] | None = None,
+    tool_ids: list[int] | None = None,
+) -> None:
+    if agent_type is AgentType.SUPERVISOR and role not in _SUPERVISOR_ROLES:
+        allowed = ", ".join(sorted(r.name for r in _SUPERVISOR_ROLES))
+        raise ValueError(f"Supervisor type requires role to be one of: {allowed}")
+    if agent_type is AgentType.SUPPORTING and role not in _SUPPORTING_ROLES:
+        allowed = ", ".join(sorted(r.name for r in _SUPPORTING_ROLES))
+        raise ValueError(f"Supporting type requires role to be one of: {allowed}")
+    if agent_type is AgentType.SUPERVISOR and toolset_ids:
+        raise ValueError("Supervisor agents cannot have toolsets; attach toolsets to supporting agents instead.")
+    if agent_type is AgentType.SUPERVISOR and tool_ids:
+        raise ValueError("Supervisor agents cannot have tools; attach tools to supporting agents instead.")
+
+
 class CreateAgent(BaseModel):
     name: str
     description: str
@@ -47,16 +65,7 @@ class CreateAgent(BaseModel):
 
     @model_validator(mode="after")
     def validate_type_and_role(self) -> Self:
-        if self.type is AgentType.SUPERVISOR and self.role not in _SUPERVISOR_ROLES:
-            allowed = ", ".join(sorted(r.name for r in _SUPERVISOR_ROLES))
-            raise ValueError(f"Supervisor type requires role to be one of: {allowed}")
-        if self.type is AgentType.SUPPORTING and self.role not in _SUPPORTING_ROLES:
-            allowed = ", ".join(sorted(r.name for r in _SUPPORTING_ROLES))
-            raise ValueError(f"Supporting type requires role to be one of: {allowed}")
-        if self.type is AgentType.SUPERVISOR and self.toolset_ids:
-            raise ValueError("Supervisor agents cannot have toolsets; attach toolsets to supporting agents instead.")
-        if self.type is AgentType.SUPERVISOR and self.tool_ids:
-            raise ValueError("Supervisor agents cannot have tools; attach tools to supporting agents instead.")
+        validate_agent_configuration(self.type, self.role, self.toolset_ids, self.tool_ids)
         return self
 
 class UpdateAgent(BaseModel):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 from typing import Any
 
 from fastapi import HTTPException
@@ -109,9 +110,10 @@ async def build_agent_toolset_catalog(
             auth_type = toolset.auth_type
             header = toolset.header
             try:
-                if is_valid_server(toolset.url, auth_required, auth_type, token, header):
+                if await asyncio.to_thread(is_valid_server, toolset.url, auth_required, auth_type, token, header):
                     haystack_tools.append(
-                        MCP(
+                        await asyncio.to_thread(
+                            MCP,
                             toolset.url,
                             tool_names or None,
                             auth_required,
@@ -122,8 +124,18 @@ async def build_agent_toolset_catalog(
                     )
                 else:
                     logger.error("Invalid MCP server: %s", toolset.url)
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"MCP toolset {toolset.id} is unavailable",
+                    )
             except Exception as e:
                 logger.error("Error adding MCP toolset %s: %s", toolset.url, e)
+                if isinstance(e, HTTPException):
+                    raise
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"MCP toolset {toolset.id} is unavailable",
+                ) from e
 
         elif toolset.type == ToolType.HTTP:
             if toolset.auth_required and token is None:

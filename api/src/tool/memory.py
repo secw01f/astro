@@ -23,6 +23,10 @@ def _embed(text: str) -> list[float]:
     return list(_get_model().embed([text]))[0].tolist()
 
 
+async def warm_memory_model() -> None:
+    await asyncio.to_thread(_get_model)
+
+
 def _truncate_text(content: str, max_chars: int) -> tuple[str, bool]:
     if len(content) <= max_chars:
         return content, False
@@ -50,11 +54,12 @@ def _trim_memory_rows(rows: list[dict]) -> list[dict]:
     return trimmed
 
 async def _store_memory(user_id: int, content: str, category: str | None = None) -> dict:
+    embedding = await asyncio.to_thread(_embed, content)
     async with async_session() as session:
         memory = Memory(
             content=content,
             category=category,
-            embedding=_embed(content),
+            embedding=embedding,
             user_id=user_id,
         )
         session.add(memory)
@@ -66,8 +71,9 @@ async def _recall_memory(
     user_id: int, query: str, limit: int = 2, category: str | None = None
 ) -> list[dict]:
     safe_limit = max(1, min(limit, settings.MEMORY_RECALL_MAX_ITEMS))
+    query_embedding = await asyncio.to_thread(_embed, query)
     async with async_session() as session:
-        distance = Memory.embedding.cosine_distance(_embed(query))
+        distance = Memory.embedding.cosine_distance(query_embedding)
         similarity = (literal(1.0) - distance).label("similarity")
         statement = (
             select(Memory, similarity)

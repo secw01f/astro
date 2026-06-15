@@ -1,6 +1,8 @@
 import logging
 import asyncio
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
@@ -28,9 +30,34 @@ from src.tool.spec import SpecToolset
 from src.tool.message import MessageToolset
 from src.tool.file import FileToolset
 from lib.file import FileRunRegistry, FileRunSession, save_user_file
+from settings import settings
 
 stack_router = APIRouter(prefix="/stack", dependencies=[Depends(verify_token)])
 logger = logging.getLogger(__name__)
+_STACK_RUN_EXECUTOR = ThreadPoolExecutor(max_workers=settings.STACK_RUN_MAX_CONCURRENCY)
+_STACK_RUN_TASKS: set[asyncio.Task] = set()
+_STACK_RUN_SEMAPHORE: asyncio.Semaphore | None = None
+
+
+def _get_stack_run_semaphore() -> asyncio.Semaphore:
+    global _STACK_RUN_SEMAPHORE
+    if _STACK_RUN_SEMAPHORE is None:
+        _STACK_RUN_SEMAPHORE = asyncio.Semaphore(settings.STACK_RUN_MAX_CONCURRENCY)
+    return _STACK_RUN_SEMAPHORE
+
+
+async def _read_upload_with_limit(file: UploadFile, max_bytes: int) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(status_code=413, detail="Uploaded file is too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 @stack_router.get("/stacks")
 async def get_all_stacks(request: Request, session: session_dep) -> dict[str, list[StackPublic]]:
@@ -185,15 +212,67 @@ async def update_stack(request: Request, id: int, stack: Annotated[UpdateStack, 
 
     user_id = claims["id"]
     
-    statement = select(Stack).where(Stack.id == id, Stack.user_id == user_id)
+    statement = (
+        select(Stack)
+        .where(Stack.id == id, Stack.user_id == user_id)
+        .options(selectinload(Stack.agents))
+    )
     result = await session.exec(statement)
     existing_stack = result.first()
     if not existing_stack:
         raise HTTPException(status_code=404, detail="Stack not found")
 
     updates = stack.model_dump(exclude_unset=True)
+    supervisor_update = updates.pop("supervisor", None)
+    supporting_update = updates.pop("supporting", None)
     for key, value in updates.items():
         setattr(existing_stack, key, value)
+
+    if supervisor_update is not None or supporting_update is not None:
+        current_supervisors = [
+            agent for agent in existing_stack.agents if agent.agent_type == AgentType.SUPERVISOR
+        ]
+        current_supporting = [
+            agent for agent in existing_stack.agents if agent.agent_type == AgentType.SUPPORTING
+        ]
+        supervisor_id = supervisor_update
+        if supervisor_id is None:
+            if not current_supervisors or current_supervisors[0].id is None:
+                raise HTTPException(status_code=400, detail="Stack has no supervisor agent")
+            supervisor_id = current_supervisors[0].id
+        supporting_ids = (
+            list(dict.fromkeys(supporting_update))
+            if supporting_update is not None
+            else [agent.id for agent in current_supporting if agent.id is not None]
+        )
+        requested_ids = list(dict.fromkeys([supervisor_id, *supporting_ids]))
+        agent_stmt = select(Agent).where(Agent.id.in_(requested_ids), Agent.user_id == user_id)
+        all_agents = (await session.exec(agent_stmt)).all()
+        all_by_id = {agent.id: agent for agent in all_agents if agent.id is not None}
+        missing_ids = [agent_id for agent_id in requested_ids if agent_id not in all_by_id]
+        if missing_ids:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": "One or more agents do not exist or are not owned by you",
+                    "agent_ids": missing_ids,
+                },
+            )
+        supervisor_agent = all_by_id[supervisor_id]
+        if supervisor_agent.agent_type != AgentType.SUPERVISOR:
+            raise HTTPException(status_code=400, detail="Supervisor agent must have type 'supervisor'")
+        supporting_agents = [all_by_id[agent_id] for agent_id in supporting_ids]
+        wrong_supporting = [agent.id for agent in supporting_agents if agent.agent_type != AgentType.SUPPORTING]
+        if wrong_supporting:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": "Supporting agents must have type 'supporting'",
+                    "agent_ids": wrong_supporting,
+                },
+            )
+        existing_stack.agents = [supervisor_agent, *supporting_agents]
+
     await session.commit()
     statement = (
         select(Stack)
@@ -281,12 +360,12 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
         raise HTTPException(status_code=403, detail="Supervisor LLM credential is not owned by you")
     _token = decrypt_token(_credential.token)
 
-    supervisor_llm = chat_generator(_supervisor_llm.provider, _supervisor_llm.model, _token, _supervisor_llm.key_id, _supervisor_llm.region, _supervisor_llm.max_tokens)
+    supervisor_llm = chat_generator(_supervisor_llm.provider, _supervisor_llm.model, _token, _supervisor_llm.key_id, _supervisor_llm.region, _supervisor_llm.max_tokens, user_id=user_id)
     
     run_id = str(uuid.uuid4())
 
     main_queue = asyncio.Queue()
-    client_queue = asyncio.Queue()
+    client_queue = asyncio.Queue(maxsize=100)
     storage_queue = asyncio.Queue()
 
     _app_loop = asyncio.get_running_loop()
@@ -299,7 +378,6 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
         loop=_app_loop,
         agent_name=_stack_supervisor.name,
     )
-    FileRunRegistry.register(file_session)
     _callback = StreamingCallback(
         _stack_supervisor.name,
         main_queue,
@@ -307,6 +385,7 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
         loop=_app_loop,
     )
 
+    support_streams: list[StreamingCallback] = []
     supervisor = SupervisorAgent(
         chat_generator=supervisor_llm,
         system_prompt=create_prompt(_stack_supervisor.system_prompt, AgentType.SUPERVISOR),
@@ -316,7 +395,7 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
     supervisor.add_tool(MemoryToolset(user_id, app_loop=_app_loop))
     supervisor.add_tool(DateToolset())
     supervisor.add_tool(MathToolset())
-    supervisor.add_tool(SpecToolset())
+    supervisor.add_tool(SpecToolset(user_id))
     supervisor.add_tool(MessageToolset(id, user_id, app_loop=_app_loop))
     supervisor.add_tool(
         FileToolset(user_id, file_session=file_session, app_loop=_app_loop)
@@ -346,13 +425,13 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
             )
         _token = decrypt_token(_credential.token)
 
-        _agent_llm = chat_generator(_llm.provider, _llm.model, _token, _llm.key_id, _llm.region, _llm.max_tokens)
+        _agent_llm = chat_generator(_llm.provider, _llm.model, _token, _llm.key_id, _llm.region, _llm.max_tokens, user_id=user_id)
 
         _agent_tools = [
             MemoryToolset(user_id, app_loop=_app_loop),
             DateToolset(),
             MathToolset(),
-            SpecToolset(),
+            SpecToolset(user_id),
             FileToolset(user_id, file_session=file_session, app_loop=_app_loop),
         ]
 
@@ -366,6 +445,7 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
             run_id,
             loop=_app_loop,
         )
+        support_streams.append(_support_stream)
         _agent = SupportingAgent(
             chat_generator=_agent_llm,
             name=agent.name,
@@ -393,11 +473,11 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
     session.add(user_message)
     await session.commit()
 
-    assistant_position_state = {"next": _position + 1}
-
     async def storage_worker():
         async with async_session() as storage_session:
-            await storage_consumer(storage_queue, storage_session, id, assistant_position_state)
+            await storage_consumer(storage_queue, storage_session, id, user_id)
+
+    client_closed = asyncio.Event()
 
     async def fanout_worker():
         await fanout(
@@ -406,6 +486,7 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
             storage_queue,
             verbose=execute.verbose,
             supervisor_agent_name=_stack_supervisor.name,
+            client_closed=client_closed,
         )
 
     async def runner():
@@ -413,7 +494,10 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
         storage_task = asyncio.create_task(storage_worker())
         try:
             messages_for_run = [ChatMessage.from_user(execute.message)]
-            result = await asyncio.to_thread(supervisor.run, messages=messages_for_run)
+            result = await _app_loop.run_in_executor(
+                _STACK_RUN_EXECUTOR,
+                partial(supervisor.run, messages=messages_for_run),
+            )
 
             await asyncio.sleep(0)
 
@@ -425,21 +509,37 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
             _callback.emit_final_assistant_text(final_text)
         except Exception as e:
             logger.exception("Stack run failed", exc_info=e)
-            _callback.emit_final_assistant_text(
-                f"Stack execution failed: {str(e)}"
-            )
+            _callback.emit_final_assistant_text("Stack execution failed.")
         finally:
             FileRunRegistry.unregister(run_id)
+            for callback in support_streams:
+                if callback.started:
+                    callback.end()
             _callback.end()
             await asyncio.sleep(0)
             await main_queue.put(None)
-            await fanout_task
-            await storage_task
+            try:
+                await fanout_task
+                await storage_task
+            finally:
+                _get_stack_run_semaphore().release()
 
-    asyncio.create_task(runner())
+    semaphore = _get_stack_run_semaphore()
+    if semaphore.locked():
+        raise HTTPException(status_code=429, detail="Too many stack runs are already active")
+    await semaphore.acquire()
+    try:
+        FileRunRegistry.register(file_session)
+        task = asyncio.create_task(runner())
+    except Exception:
+        FileRunRegistry.unregister(run_id)
+        semaphore.release()
+        raise
+    _STACK_RUN_TASKS.add(task)
+    task.add_done_callback(_STACK_RUN_TASKS.discard)
 
     return StreamingResponse(
-        event_stream(client_queue),
+        event_stream(client_queue, client_closed),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -467,11 +567,12 @@ async def submit_run_file(
     if file_session.stack_id != id or file_session.user_id != user_id:
         raise HTTPException(status_code=404, detail="Stack run not found")
 
-    content = await file.read()
+    content = await _read_upload_with_limit(file, settings.MAX_UPLOAD_BYTES)
     if not content:
         raise HTTPException(status_code=400, detail="Empty file")
 
-    row = save_user_file(
+    row = await asyncio.to_thread(
+        save_user_file,
         user_id,
         file.filename or "upload",
         content,

@@ -19,11 +19,12 @@ def _truncate(text: str, limit: int = _MAX_TOOL_TEXT_CHARS) -> str:
 
 async def _list_files(user_id: int, limit: int = 20) -> list[dict]:
     safe_limit = max(1, min(limit, 50))
-    return list_user_files(user_id)[:safe_limit]
+    files = await asyncio.to_thread(list_user_files, user_id)
+    return files[:safe_limit]
 
 
 async def _read_file(user_id: int, file_id: str) -> dict:
-    item = get_user_file(user_id, file_id)
+    item = await asyncio.to_thread(get_user_file, user_id, file_id)
     if item is None:
         return {"found": False}
     row, content = item

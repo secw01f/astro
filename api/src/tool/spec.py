@@ -19,6 +19,12 @@ SPEC_TEMPLATE_NAMES = {
 }
 
 
+def _specs_root(user_id: int | None = None) -> str:
+    if user_id is None:
+        return SPECS_DIR
+    return os.path.join(SPECS_DIR, "users", str(user_id))
+
+
 def _normalize_spec_type(spec_type: str) -> str | None:
     key = spec_type.strip().lower()
     if key in SPEC_TYPE_DIRS:
@@ -45,15 +51,15 @@ def _spec_basename(spec_type: str, name: str) -> str:
     return f"{base}.md"
 
 
-def _spec_path(spec_type: str, name: str) -> str:
-    return os.path.join(SPECS_DIR, SPEC_TYPE_DIRS[spec_type], _spec_basename(spec_type, name))
+def _spec_path(spec_type: str, name: str, user_id: int | None = None) -> str:
+    return os.path.join(_specs_root(user_id), SPEC_TYPE_DIRS[spec_type], _spec_basename(spec_type, name))
 
 
 def _templates_root() -> str:
     return os.path.join(SPECS_DIR, TEMPLATES_DIR)
 
 
-def _find_spec_path(name: str) -> str | None:
+def _find_spec_path(name: str, user_id: int | None = None) -> str | None:
     base = _normalize_name(name)
     candidates: list[str] = []
     if not base.endswith(".md"):
@@ -63,7 +69,7 @@ def _find_spec_path(name: str) -> str | None:
 
     for directory in SPEC_TYPE_DIRS.values():
         for candidate in candidates:
-            path = os.path.join(SPECS_DIR, directory, candidate)
+            path = os.path.join(_specs_root(user_id), directory, candidate)
             if os.path.isfile(path):
                 return path
     return None
@@ -105,13 +111,13 @@ def _is_template_path(path: str) -> bool:
     return os.path.commonpath([path, _templates_root()]) == _templates_root()
 
 
-def _list_spec_files(spec_type: str | None = None, search: str | None = None) -> list[str]:
+def _list_spec_files(spec_type: str | None = None, search: str | None = None, user_id: int | None = None) -> list[str]:
     results: list[str] = []
     types = [spec_type] if spec_type else list(SPEC_TYPE_DIRS)
     query = search.strip().lower() if search else None
 
     for spec_type_name in types:
-        directory = os.path.join(SPECS_DIR, SPEC_TYPE_DIRS[spec_type_name])
+        directory = os.path.join(_specs_root(user_id), SPEC_TYPE_DIRS[spec_type_name])
         if not os.path.isdir(directory):
             continue
         for filename in sorted(os.listdir(directory)):
@@ -327,13 +333,130 @@ def delete_spec(name: str) -> str:
     return f"Spec deleted at {os.path.relpath(spec_path, SPECS_DIR)}"
 
 
-def SpecToolset() -> Toolset:
+def SpecToolset(user_id: int) -> Toolset:
+    user_root = _specs_root(user_id)
+
+    @tool(name="list_specs")
+    def user_list_specs(spec_type: str | None = None, search: str | None = None) -> list[str] | str:
+        normalized_type = _normalize_spec_type(spec_type) if spec_type else None
+        if spec_type and normalized_type is None:
+            valid = ", ".join(sorted(SPEC_TYPE_DIRS))
+            return f"Invalid spec_type '{spec_type}'. Use one of: {valid}"
+        return _list_spec_files(normalized_type, search, user_id)
+
+    @tool(name="list_spec_templates")
+    def user_list_spec_templates(spec_type: str | None = None, search: str | None = None) -> list[str] | str:
+        normalized_type = _normalize_spec_type(spec_type) if spec_type else None
+        if spec_type and normalized_type is None:
+            valid = ", ".join(sorted(SPEC_TYPE_DIRS))
+            return f"Invalid spec_type '{spec_type}'. Use one of: {valid}"
+        return _list_template_files(normalized_type, search)
+
+    @tool(name="get_spec_template")
+    def user_get_spec_template(spec_type: str) -> str:
+        normalized_type = _normalize_spec_type(spec_type)
+        if normalized_type is None:
+            valid = ", ".join(sorted(SPEC_TYPE_DIRS))
+            return f"Invalid spec_type '{spec_type}'. Use one of: {valid}"
+
+        template_path = _find_template_path(spec_type=normalized_type)
+        if template_path is None:
+            return f"Template for {spec_type} not found"
+        with open(template_path, "r") as file:
+            return file.read()
+
+    @tool(name="get_spec")
+    def user_get_spec(name: str) -> str:
+        spec_path = _find_spec_path(name, user_id) or _find_template_path(name=name)
+        if spec_path is None:
+            return f"Spec {name} not found"
+        with open(spec_path, "r") as file:
+            return file.read()
+
+    @tool(name="create_spec")
+    def user_create_spec(spec_type: str, name: str, content: str) -> str:
+        normalized_type = _normalize_spec_type(spec_type)
+        if normalized_type is None:
+            valid = ", ".join(sorted(SPEC_TYPE_DIRS))
+            return f"Invalid spec_type '{spec_type}'. Use one of: {valid}"
+        if not content.strip():
+            return "Spec content cannot be empty"
+
+        spec_path = _spec_path(normalized_type, name, user_id)
+        if os.path.exists(spec_path):
+            return f"Spec already exists at {os.path.relpath(spec_path, user_root)}"
+
+        basename = os.path.basename(spec_path)
+        expected_prefix = SPEC_TYPE_PREFIXES[normalized_type]
+        if not basename.startswith(expected_prefix):
+            return (
+                f"Spec filename must start with '{expected_prefix}' "
+                f"(got '{basename}')"
+            )
+
+        os.makedirs(os.path.dirname(spec_path), exist_ok=True)
+        with open(spec_path, "w") as file:
+            file.write(content)
+        return f"Spec created at {os.path.relpath(spec_path, user_root)}"
+
+    @tool(name="update_spec")
+    def user_update_spec(
+        name: str,
+        old_string: str | None = None,
+        new_string: str | None = None,
+        content: str | None = None,
+        replace_all: bool = False,
+    ) -> str:
+        spec_path = _find_spec_path(name, user_id)
+        if spec_path is None:
+            return f"Spec {name} not found"
+
+        has_patch = old_string is not None or new_string is not None
+        has_full = content is not None
+
+        if has_patch and has_full:
+            return "Provide either old_string/new_string or content, not both"
+        if has_patch:
+            if old_string is None:
+                return "old_string is required for partial updates"
+            if new_string is None:
+                return "new_string is required for partial updates"
+            with open(spec_path, "r") as file:
+                current = file.read()
+            if old_string not in current:
+                return "old_string not found in spec; read the spec and try again"
+            count = current.count(old_string)
+            if count > 1 and not replace_all:
+                return (
+                    f"old_string appears {count} times; set replace_all=true "
+                    "or use a more specific old_string"
+                )
+            updated = current.replace(old_string, new_string, -1 if replace_all else 1)
+            with open(spec_path, "w") as file:
+                file.write(updated)
+            return f"Spec updated at {os.path.relpath(spec_path, user_root)}"
+
+        if has_full:
+            with open(spec_path, "w") as file:
+                file.write(content)
+            return f"Spec updated at {os.path.relpath(spec_path, user_root)}"
+
+        return "Provide old_string and new_string for a partial update, or content for a full rewrite"
+
+    @tool(name="delete_spec")
+    def user_delete_spec(name: str) -> str:
+        spec_path = _find_spec_path(name, user_id)
+        if spec_path is None:
+            return f"Spec {name} not found"
+        os.remove(spec_path)
+        return f"Spec deleted at {os.path.relpath(spec_path, user_root)}"
+
     return Toolset([
-        list_specs,
-        list_spec_templates,
-        get_spec_template,
-        get_spec,
-        create_spec,
-        update_spec,
-        delete_spec,
+        user_list_specs,
+        user_list_spec_templates,
+        user_get_spec_template,
+        user_get_spec,
+        user_create_spec,
+        user_update_spec,
+        user_delete_spec,
     ])

@@ -30,7 +30,7 @@ async def get_message_history(request: Request, body: MessageHistory, session: s
     count_stmt = select(func.count(Message.id)).where(Message.stack_id == body.stack_id)
     if body.last_position is not None:
         count_stmt = count_stmt.where(Message.position >= body.last_position)
-    total = await session.scalar(count_stmt)
+    total = await session.scalar(count_stmt) or 0
 
     statement = select(Message).where(Message.stack_id == body.stack_id).order_by(Message.position.desc())
     if body.offset is not None:
@@ -45,6 +45,6 @@ async def get_message_history(request: Request, body: MessageHistory, session: s
     last_position = messages[-1].position if messages else -1
     limit = body.limit if body.limit is not None else 50
     offset = body.offset if body.offset is not None else 0
-    more = total > limit * (offset + 1)
+    more = (offset + len(messages)) < total
 
     return MessageHistoryResponse(messages=[MessagePublic.model_validate(message) for message in messages], total=total, last_position=last_position, more=more)

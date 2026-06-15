@@ -16,6 +16,10 @@ logger = logging.getLogger(__name__)
 engine = create_async_engine(settings.DB_URL, echo=False)
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
+async def _run_schema_upgrades(conn) -> None:
+    await conn.execute(text('ALTER TABLE "user" ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 0'))
+    await conn.execute(text("ALTER TABLE credential ADD COLUMN IF NOT EXISTS crypto_version INTEGER NOT NULL DEFAULT 0"))
+
 async def init_db():
     max_retries = 10
     retry_delay = 2
@@ -25,6 +29,8 @@ async def init_db():
             async with engine.begin() as conn:
                 await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
                 await conn.run_sync(SQLModel.metadata.create_all)
+                await _run_schema_upgrades(conn)
+            break
 
         except Exception as e:
             if attempt < max_retries - 1:

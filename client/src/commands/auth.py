@@ -62,6 +62,8 @@ def update(ctx: click.Context, user_id: int | None, username: str | None, email:
     if password:
         new_password = click.prompt("New password", hide_input=True)
         payload["new_password"] = new_password
+    if user_id is None and any(key in payload for key in ("username", "email", "new_password")):
+        payload["current_password"] = click.prompt("Current password", hide_input=True)
 
     if not payload:
         click.echo(red("No update fields provided", "bold"))
@@ -108,10 +110,9 @@ def create(ctx: click.Context):
         return
     data = response.json()
     click.echo(green("User created successfully", "bold"))
-    click.echo(white(f"Reset token: {data['reset_token']}", "normal"))
-    expires = data.get("expires")
-    if expires:
-        click.echo(white(f"Reset token expires in: {expires}", "normal"))
+    temporary_password = data.get("temporary_password")
+    if temporary_password:
+        click.echo(white(f"Temporary password: {temporary_password}", "normal"))
 
 @auth.command()
 @click.pass_context
@@ -122,8 +123,7 @@ def reset_password(ctx: click.Context, token: str):
     base = str(ctx.obj["url"]).rstrip("/")
     response = httpx.post(
         f"{base}/auth/user/reset-password",
-        params={"token": token},
-        json={"new_password": password},
+        json={"token": token, "new_password": password},
         timeout=30.0,
     )
     if response.status_code != 200:

@@ -25,6 +25,8 @@ ______________________________________________________________________
 Most AI in security stops at analyzing output.  
 ASTRO goes further—agents **use memory, documentation, and real tools** to execute workflows the way engineers actually work.
 
+This fork includes review-driven fixes for correctness, reliability, operational hardening, and safer defaults. See [Fork Changes](docs/FORK-CHANGES.md).
+
 ---
 
 ## What ASTRO Does
@@ -167,7 +169,7 @@ This will:
 - API → http://localhost:8000  
 - CLI → `astro init` then `astro --help`
 
-`./deploy.sh` prints one-time credentials for the default `stack` user. Run `astro init` to set the API URL, log in, create your permanent account, and set your password in one flow.
+`./deploy.sh` creates one-time credentials for the default `stack` user in the API container and prints the local command to reveal them. Run `astro init` to set the API URL, log in, create your permanent account, and set your password in one flow.
 
 ---
 
@@ -184,7 +186,9 @@ cp .env.example .env
 Update values like:
 
 - `DB_URL`
-- `SECRET_KEY`
+- `JWT_SECRET_KEY`
+- `CREDENTIAL_ENCRYPTION_KEY`
+- `TOOLS_HMAC_SECRET`
 - `DEFAULT_TOOLS_BASE_URL`
 
 ---

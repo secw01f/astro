@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 import re
@@ -47,6 +48,33 @@ def _report_path(name: str) -> Path | None:
     if not path.is_relative_to(base):
         return None
     return path
+
+
+def _list_report_rows(user_id: int, limit: int) -> list[dict]:
+    user_dir = _user_reports_dir(user_id)
+    report_files = sorted(
+        user_dir.glob("*.md"),
+        key=lambda report: report.stat().st_mtime,
+        reverse=True,
+    )[: max(1, limit)]
+
+    reports: list[dict] = []
+    for report in report_files:
+        stats = report.stat()
+        reports.append(
+            {
+                "name": report.name,
+                "path": str(report),
+                "bytes": stats.st_size,
+                "modified": datetime.fromtimestamp(stats.st_mtime, tz=timezone.utc).isoformat(),
+            }
+        )
+    return reports
+
+
+def _append_text(path: Path, section: str) -> None:
+    with path.open("a", encoding="utf-8") as file:
+        file.write(section)
 
 
 class BuildReportInput(BaseModel):
@@ -140,8 +168,9 @@ async def save_report(input: SaveReportInput) -> dict:
             "error": "Report already exists. Set overwrite=true to replace it.",
         }
 
-    path.write_text(input.content, encoding="utf-8")
-    return {"saved": True, "path": str(path), "bytes": path.stat().st_size}
+    await asyncio.to_thread(path.write_text, input.content, encoding="utf-8")
+    size = await asyncio.to_thread(lambda: path.stat().st_size)
+    return {"saved": True, "path": str(path), "bytes": size}
 
 
 @tool(
@@ -157,7 +186,7 @@ async def get_report(input: GetReportInput) -> dict:
     if not path.exists():
         return {"found": False, "path": str(path), "error": "Report not found"}
 
-    content = path.read_text(encoding="utf-8")
+    content = await asyncio.to_thread(path.read_text, encoding="utf-8")
     return {"found": True, "path": str(path), "content": content, "length": len(content)}
 
 
@@ -175,8 +204,7 @@ async def append_report_section(input: AppendSectionInput) -> dict:
         return {"updated": False, "path": str(path), "error": "Report not found"}
 
     section = f"\n\n## {input.heading}\n{input.content}\n"
-    with path.open("a", encoding="utf-8") as file:
-        file.write(section)
+    await asyncio.to_thread(_append_text, path, section)
 
     return {"updated": True, "path": str(path), "appended_chars": len(section)}
 
@@ -192,23 +220,4 @@ async def list_reports(input: ListReportsInput) -> list[dict] | dict:
     if user_id is None:
         return {"error": _USER_CONTEXT_ERROR}
 
-    user_dir = _user_reports_dir(user_id)
-    report_files = sorted(
-        user_dir.glob("*.md"),
-        key=lambda report: report.stat().st_mtime,
-        reverse=True,
-    )[: max(1, input.limit)]
-
-    reports: list[dict] = []
-    for report in report_files:
-        stats = report.stat()
-        reports.append(
-            {
-                "name": report.name,
-                "path": str(report),
-                "bytes": stats.st_size,
-                "modified": datetime.fromtimestamp(stats.st_mtime, tz=timezone.utc).isoformat(),
-            }
-        )
-
-    return reports
+    return await asyncio.to_thread(_list_report_rows, user_id, input.limit)

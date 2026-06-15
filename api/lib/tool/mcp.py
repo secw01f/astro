@@ -5,6 +5,7 @@ from haystack_integrations.tools.mcp import MCPToolset, StreamableHttpServerInfo
 from haystack.utils import Secret
 
 from lib.tool.enums import AuthType
+from lib.security.network import validate_outbound_url
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +16,7 @@ def _normalize_bearer_token(token: str) -> str:
     return normalized
 
 def MCP(server: str, tools: list[str] | None = None, auth_required: bool = False, auth_type: AuthType | None = None, token: str | None = None, header: str | None = None) -> MCPToolset:
+    validate_outbound_url(server)
     server_info = StreamableHttpServerInfo(url=server)
     if auth_required:
         if auth_type == AuthType.BEARER:
@@ -31,7 +33,8 @@ def MCP(server: str, tools: list[str] | None = None, auth_required: bool = False
 
 def is_valid_server(url: str, auth_required: bool = False, auth_type: AuthType | None = None, token: str | None = None, header: str | None = None) -> bool:
     try:
-        with httpx.Client() as client:
+        validate_outbound_url(url)
+        with httpx.Client(timeout=5.0) as client:
             client.headers["Accept"] = "application/json, text/event-stream"
             if auth_required:
                 if auth_type == AuthType.BEARER:
