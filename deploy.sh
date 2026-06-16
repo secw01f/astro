@@ -40,9 +40,9 @@ else
   echo "        export PATH=\"$SCRIPT_DIR/client/.venv/bin:\$PATH\""
 fi
 
-echo "Retrieving stack bootstrap user file..."
+echo "Checking for stack bootstrap user file..."
 if docker compose exec -T api sh -c 'test -f /api/stack_user.json'; then
-  docker compose exec -T api sh -c 'cat /api/stack_user.json'
+  echo "To retrieve the stack user details, run: docker compose exec -T api sh -c 'cat /api/stack_user.json'"
 else
   echo "stack_user.json not found in api container (it may be consumed already)."
 fi

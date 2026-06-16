@@ -143,9 +143,16 @@ For JWT issuance, namespace setup, and run instructions, see the [template READM
 
 ---
 
-## Quick Start
+## Quick Start (LOCAL DEPLOYMENT)
 
 From the repository root:
+
+```bash
+cp .env.example .env
+python3 -c 'import secrets; print(secrets.token_urlsafe(48))'
+```
+
+Change the value of `SECRET_KEY` in the `.env` to the value returned by the `python3` command above.
 
 ```bash
 chmod +x deploy.sh
@@ -167,7 +174,7 @@ This will:
 - API → http://localhost:8000  
 - CLI → `astro init` then `astro --help`
 
-`./deploy.sh` prints one-time credentials for the default `stack` user. Run `astro init` to set the API URL, log in, create your permanent account, and set your password in one flow.
+`./deploy.sh` prints the command for obtaining the credentials for the default `stack` user. Run `astro init` to set the API URL, log in, create your permanent account, and set your password in one flow.
 
 ---
 
@@ -184,7 +191,6 @@ cp .env.example .env
 Update values like:
 
 - `DB_URL`
-- `SECRET_KEY`
 - `DEFAULT_TOOLS_BASE_URL`
 
 ---
