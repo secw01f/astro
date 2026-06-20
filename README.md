@@ -145,9 +145,16 @@ For JWT issuance, namespace setup, and run instructions, see the [template READM
 
 ---
 
-## Quick Start
+## Quick Start (LOCAL DEPLOYMENT)
 
 From the repository root:
+
+```bash
+cp .env.example .env
+python3 -c 'import secrets; print(secrets.token_urlsafe(48))'
+```
+
+Change the value of `SECRET_KEY` in the `.env` to the value returned by the `python3` command above.
 
 ```bash
 chmod +x deploy.sh

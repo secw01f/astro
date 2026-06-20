@@ -16,6 +16,8 @@ services:
         condition: service_started
       redis:
         condition: service_started
+    env_file:
+      - .env
     entrypoint: ["/bin/bash", "entrypoint.sh"]
     volumes:
       - specs:/api/specs

@@ -1,9 +1,10 @@
 import logging
 import json
-import redis.asyncio as redis
+import sys
 
 from fastapi import FastAPI
 from sqlmodel import select
+import redis.asyncio as redis
 
 from src.logging.config import log_config
 from settings import settings
@@ -135,6 +136,10 @@ async def _sync_default_http_toolset(session, name: str, description: str, path:
 @api.on_event("startup")
 async def startup_event():
     logger.info("API startup initiated")
+
+    if settings.SECRET_KEY == "supersecretkey" or settings.SECRET_KEY == "" or settings.SECRET_KEY is None or len(settings.SECRET_KEY) < 64:
+        logger.error("SECRET_KEY is not set or insecure")
+        raise SystemExit("SECRET_KEY is not set or insecure")
 
     logger.info("Initializing the database")
     await init_db()

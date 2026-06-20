@@ -83,7 +83,7 @@ else
   echo "        export PATH=\"$SCRIPT_DIR/client/.venv/bin:\$PATH\""
 fi
 
-echo "Retrieving stack bootstrap user file..."
+echo "Checking for stack bootstrap user file..."
 if docker compose exec -T api sh -c 'test -f /api/stack_user.json'; then
   echo "Bootstrap credentials exist in the api container."
   echo "Reveal them locally only when ready to complete first login:"
