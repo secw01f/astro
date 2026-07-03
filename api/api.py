@@ -8,6 +8,7 @@ import redis.asyncio as redis
 
 from src.logging.config import log_config
 from settings import settings
+from src.celery import celery
 from lib.auth.auth import create_user, generate_password
 from lib.auth.enums import Role
 from src.db.db import init_db, async_session
