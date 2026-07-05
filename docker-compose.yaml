@@ -53,6 +53,26 @@ services:
       timeout: 3s
       retries: 5
 
+  celery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_started
+    command: ["celery", "--app", "src.celery:celery", "worker", "--loglevel=info"]
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_started
+    command: ["celery", "--app", "src.celery:celery", "beat", "--loglevel=info"]
+
 volumes:
   dbdata:
   specs:
