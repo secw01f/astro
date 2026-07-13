@@ -1,5 +1,3 @@
-import importlib
-import pkgutil
 from typing import get_type_hints
 
 from lib.models import ToolDef
@@ -12,6 +10,8 @@ def create_tool_registry(namespace: str):
         def tool_wrapper(func):
             hints = get_type_hints(func, globalns=func.__globals__, localns=None)
             _input = hints.get("input")
+            if _input is None:
+                raise TypeError(f"Tool {namespace}.{name} must type-annotate its input parameter")
             
             registry[name] = ToolDef(
                 name = name,
@@ -26,28 +26,3 @@ def create_tool_registry(namespace: str):
             return func
         return tool_wrapper
     return registry, tool
-
-def loader(base_package="src"):
-    registries = []
-
-    package = importlib.import_module(base_package)
-
-    for _, module_name, is_pkg in pkgutil.iter_modules(package.__path__):
-
-        if not is_pkg:
-            continue
-
-        try:
-            tools_module = importlib.import_module(
-                f"{base_package}.{module_name}.tools"
-            )
-
-            registry = getattr(tools_module, "Registry", None)
-
-            if registry:
-                registries.append(registry)
-
-        except ModuleNotFoundError:
-            continue
-
-    return registries

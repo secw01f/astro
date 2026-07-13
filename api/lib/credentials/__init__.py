@@ -1,11 +1,19 @@
 import base64
 
 from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from settings import settings
 
 def get_encryption_key():
-    secret = settings.SECRET_KEY.encode()
-    key = base64.urlsafe_b64encode(secret[:32].ljust(32, b'0'))
+    secret = settings.CREDENTIAL_ENCRYPTION_KEY.encode()
+    raw_key = HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=None,
+        info=b"astro-credential-encryption-v1",
+    ).derive(secret)
+    key = base64.urlsafe_b64encode(raw_key)
     return Fernet(key)
 
 def encrypt_token(token):

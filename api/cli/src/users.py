@@ -25,5 +25,6 @@ def create(
             await session.commit()
         
         print(f"The user {newuser_username} has been created with role {role}")
+        print(f"Initial password: {password}")
     
     asyncio.run(_create_user())

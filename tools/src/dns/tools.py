@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections import Counter
 from typing import Any
 
@@ -8,12 +9,27 @@ import dns.name
 import dns.query
 import dns.rdatatype
 import dns.resolver
-import dns.zone
 from pydantic import BaseModel, Field
 
 from lib.tool import create_tool_registry
+from lib.security import block_reason_for_host
 
 Registry, tool = create_tool_registry("dns")
+
+
+async def _blocked_nameserver(nameservers: list[str] | None) -> str | None:
+    for nameserver in nameservers or []:
+        reason = await asyncio.to_thread(block_reason_for_host, nameserver, 53)
+        if reason is not None:
+            return f"Nameserver target blocked: {nameserver}"
+    return None
+
+
+async def _blocked_single_nameserver(nameserver: str) -> str | None:
+    reason = await asyncio.to_thread(block_reason_for_host, nameserver, 53)
+    if reason is not None:
+        return f"Nameserver target blocked: {nameserver}"
+    return None
 
 def _resolver(nameservers: list[str] | None, lifetime: float) -> dns.resolver.Resolver:
     r = dns.resolver.Resolver()
@@ -64,6 +80,69 @@ def _safe_resolve(
     except Exception as e:
         return None, str(e)
 
+
+def _rrsig_on_a(resolver: dns.resolver.Resolver, apex: str) -> tuple[list[dict[str, Any]] | None, str | None]:
+    try:
+        ans = resolver.resolve(apex, dns.rdatatype.A, raise_on_no_answer=False)
+        if ans.rrset and ans.response:
+            for rrset in ans.response.answer:
+                if rrset.rdtype != dns.rdatatype.RRSIG:
+                    continue
+                return [
+                    {
+                        "name": rrset.name.to_text(omit_final_dot=True),
+                        "ttl": rrset.ttl,
+                        "type": "RRSIG",
+                        "data": rdata.to_text(),
+                    }
+                    for rdata in rrset
+                ], None
+    except Exception as e:
+        return None, str(e)
+    return None, None
+
+
+def _axfr_summary(input: "DNSAxfrProbeInput") -> dict:
+    origin = dns.name.from_text(input.zone)
+    type_counts: Counter[str] = Counter()
+    sample_names: list[str] = []
+    seen_sample: set[str] = set()
+    truncated = False
+    xfr = None
+    try:
+        xfr = dns.query.xfr(
+            input.nameserver,
+            origin,
+            lifetime=min(input.lifetime, 15.0),
+        )
+        for message in xfr:
+            for rrset in message.answer:
+                name = rrset.name.to_text(omit_final_dot=True)
+                if name not in seen_sample:
+                    if len(sample_names) >= input.max_names:
+                        truncated = True
+                        break
+                    seen_sample.add(name)
+                    sample_names.append(name)
+                type_counts[dns.rdatatype.to_text(rrset.rdtype)] += len(rrset)
+            if truncated:
+                break
+    finally:
+        close = getattr(xfr, "close", None)
+        if close is not None:
+            close()
+
+    return {
+        "zone": input.zone,
+        "nameserver": input.nameserver,
+        "axfr_allowed": True,
+        "node_count": len(sample_names),
+        "rdtype_counts": dict(type_counts),
+        "rdtype_counts_truncated": truncated,
+        "sample_names": sample_names,
+        "truncated": truncated,
+    }
+
 class DNSLookupInput(BaseModel):
     domain: str = Field(description="Query name (FQDN or zone apex)")
     record_type: str = Field(default="A", description="RR type, e.g. A, AAAA, MX, NS, TXT, SOA, CNAME, CAA, DNSKEY, DS")
@@ -72,8 +151,16 @@ class DNSLookupInput(BaseModel):
 
 @tool(name="dns_lookup", description="Resolve a DNS record type for a name (A, MX, TXT, CAA, DNSKEY, etc.)", capabilities=["dns_lookup"], version="1.0")
 async def dns_lookup(input: DNSLookupInput) -> dict:
+    blocked = await _blocked_nameserver(input.nameservers)
+    if blocked:
+        return {
+            "domain": input.domain,
+            "record_type": input.record_type.upper(),
+            "records": [],
+            "error": blocked,
+        }
     r = _resolver(input.nameservers, input.lifetime)
-    records, err = _safe_resolve(r, input.domain, input.record_type.upper())
+    records, err = await asyncio.to_thread(_safe_resolve, r, input.domain, input.record_type.upper())
     return {
         "domain": input.domain,
         "record_type": input.record_type.upper(),
@@ -99,10 +186,13 @@ def _txt_join(records: list[dict[str, Any]]) -> list[str]:
 
 @tool(name="dns_email_auth", description="Fetch SPF, DMARC, and optional DKIM TXT for email authentication posture", capabilities=["dns_lookup", "email_security"], version="1.0")
 async def dns_email_auth(input: DNSEmailAuthInput) -> dict:
+    blocked = await _blocked_nameserver(input.nameservers)
+    if blocked:
+        return {"domain": input.domain, "error": blocked}
     r = _resolver(input.nameservers, input.lifetime)
     apex = input.domain.strip().rstrip(".")
 
-    spf_records, spf_err = _safe_resolve(r, apex, "TXT")
+    spf_records, spf_err = await asyncio.to_thread(_safe_resolve, r, apex, "TXT")
     spf_txt: list[str] = []
     spf_found: list[str] = []
     if spf_records is not None:
@@ -111,7 +201,7 @@ async def dns_email_auth(input: DNSEmailAuthInput) -> dict:
                 spf_found.append(t)
 
     dmarc_name = f"_dmarc.{apex}"
-    dmarc_records, dmarc_err = _safe_resolve(r, dmarc_name, "TXT")
+    dmarc_records, dmarc_err = await asyncio.to_thread(_safe_resolve, r, dmarc_name, "TXT")
     dmarc_found: list[str] = []
     if dmarc_records is not None:
         for t in _txt_join(dmarc_records):
@@ -121,7 +211,7 @@ async def dns_email_auth(input: DNSEmailAuthInput) -> dict:
     dkim: dict[str, Any] | None = None
     if input.dkim_selector:
         dkim_name = f"{input.dkim_selector}._domainkey.{apex}"
-        dkim_rr, dkim_err = _safe_resolve(r, dkim_name, "TXT")
+        dkim_rr, dkim_err = await asyncio.to_thread(_safe_resolve, r, dkim_name, "TXT")
         dkim_txt = _txt_join(dkim_rr or [])
         dkim = {
             "name": dkim_name,
@@ -154,9 +244,12 @@ class DNSTlsPolicyInput(BaseModel):
 
 @tool(name="dns_tls_policy", description="CAA records: which CAs may issue certificates for this hostname/zone", capabilities=["dns_lookup", "tls_policy"], version="1.0")
 async def dns_tls_policy(input: DNSTlsPolicyInput) -> dict:
+    blocked = await _blocked_nameserver(input.nameservers)
+    if blocked:
+        return {"domain": input.domain, "caa": [], "parsed": [], "error": blocked}
     r = _resolver(input.nameservers, input.lifetime)
     apex = input.domain.strip().rstrip(".")
-    records, err = _safe_resolve(r, apex, "CAA")
+    records, err = await asyncio.to_thread(_safe_resolve, r, apex, "CAA")
     parsed: list[dict[str, str]] = []
     if records:
         for rec in records:
@@ -175,32 +268,25 @@ class DNSDnssecProbeInput(BaseModel):
 
 @tool(name="dns_dnssec_probe", description="Surface DNSKEY, DS, and RRSIG presence for DNSSEC visibility (not full chain validation)", capabilities=["dns_lookup", "dnssec"], version="1.0")
 async def dns_dnssec_probe(input: DNSDnssecProbeInput) -> dict:
+    blocked = await _blocked_nameserver(input.nameservers)
+    if blocked:
+        return {
+            "domain": input.domain,
+            "dnskey": {"records": [], "error": blocked},
+            "ds": {"records": [], "error": blocked},
+            "rrsig_sample": [],
+            "rrsig_note": blocked,
+            "summary": {"has_dnskey": False, "has_ds": False, "likely_signed_zone": False},
+        }
     r = _resolver(input.nameservers, input.lifetime)
     apex = input.domain.strip().rstrip(".")
 
-    dnskey, dnskey_err = _safe_resolve(r, apex, "DNSKEY")
-    ds, ds_err = _safe_resolve(r, apex, "DS")
+    dnskey, dnskey_err = await asyncio.to_thread(_safe_resolve, r, apex, "DNSKEY")
+    ds, ds_err = await asyncio.to_thread(_safe_resolve, r, apex, "DS")
 
     rrsig_on_a: list[dict[str, Any]] | None = None
     rrsig_err: str | None = None
-    try:
-        ans = r.resolve(apex, dns.rdatatype.A, raise_on_no_answer=False)
-        if ans.rrset and ans.response:
-            for rrset in ans.response.answer:
-                if rrset.rdtype != dns.rdatatype.RRSIG:
-                    continue
-                rrsig_on_a = [
-                    {
-                        "name": rrset.name.to_text(omit_final_dot=True),
-                        "ttl": rrset.ttl,
-                        "type": "RRSIG",
-                        "data": rdata.to_text(),
-                    }
-                    for rdata in rrset
-                ]
-                break
-    except Exception as e:
-        rrsig_err = str(e)
+    rrsig_on_a, rrsig_err = await asyncio.to_thread(_rrsig_on_a, r, apex)
 
     return {
         "domain": apex,
@@ -223,40 +309,22 @@ class DNSAxfrProbeInput(BaseModel):
 
 @tool(name="dns_axfr_probe", description="Attempt a zone transfer (AXFR) against a nameserver — common misconfiguration check; only use on assets you are authorized to test", capabilities=["dns_zone_transfer", "dns_recon"], version="1.0")
 async def dns_axfr_probe(input: DNSAxfrProbeInput) -> dict:
-    origin = dns.name.from_text(input.zone)
+    blocked = await _blocked_single_nameserver(input.nameserver)
+    if blocked:
+        return {
+            "zone": input.zone,
+            "nameserver": input.nameserver,
+            "axfr_allowed": False,
+            "error": blocked,
+        }
     try:
-        xfr = dns.query.xfr(input.nameserver, origin, lifetime=input.lifetime)
-        z = dns.zone.from_xfr(xfr, origin=origin, relativize=False)
+        return await asyncio.to_thread(_axfr_summary, input)
     except dns.exception.FormError as e:
         return {"zone": input.zone, "nameserver": input.nameserver, "axfr_allowed": False, "error": f"FormError: {e}"}
     except OSError as e:
         return {"zone": input.zone, "nameserver": input.nameserver, "axfr_allowed": False, "error": str(e)}
     except Exception as e:
         return {"zone": input.zone, "nameserver": input.nameserver, "axfr_allowed": False, "error": str(e)}
-
-    names = list(z.nodes.keys())
-    type_counts: Counter[str] = Counter()
-    sample_names: list[str] = []
-    for i, node in enumerate(sorted(names, key=lambda n: str(n))):
-        if i >= input.max_names:
-            break
-        sample_names.append(node.to_text(omit_final_dot=True))
-    for node in z.nodes.values():
-        rdatasets = getattr(node, "rdatasets", None)
-        if not rdatasets:
-            continue
-        for rds in rdatasets:
-            type_counts[dns.rdatatype.to_text(rds.rdtype)] += len(rds)
-
-    return {
-        "zone": input.zone,
-        "nameserver": input.nameserver,
-        "axfr_allowed": True,
-        "node_count": len(names),
-        "rdtype_counts": dict(type_counts),
-        "sample_names": sample_names,
-        "truncated": len(names) > input.max_names,
-    }
 
 class DNSDelegationInput(BaseModel):
     domain: str = Field(description="Child zone / hostname whose delegation you want to inspect")
@@ -265,9 +333,16 @@ class DNSDelegationInput(BaseModel):
     
 @tool(name="dns_delegation", description="NS and glue-style A/AAAA for the zone apex — delegation and lame-NS hints", capabilities=["dns_lookup", "dns_delegation"], version="1.0")
 async def dns_delegation(input: DNSDelegationInput) -> dict:
+    blocked = await _blocked_nameserver(input.nameservers)
+    if blocked:
+        return {
+            "domain": input.domain,
+            "ns": {"records": [], "error": blocked},
+            "glue_summary": {},
+        }
     r = _resolver(input.nameservers, input.lifetime)
     apex = input.domain.strip().rstrip(".")
-    ns_records, ns_err = _safe_resolve(r, apex, "NS")
+    ns_records, ns_err = await asyncio.to_thread(_safe_resolve, r, apex, "NS")
     ns_targets: list[str] = []
     if ns_records:
         for rec in ns_records:
@@ -276,8 +351,8 @@ async def dns_delegation(input: DNSDelegationInput) -> dict:
 
     glue: dict[str, dict[str, Any]] = {}
     for host in ns_targets:
-        a, ae = _safe_resolve(r, host, "A")
-        aaaa, aaae = _safe_resolve(r, host, "AAAA")
+        a, ae = await asyncio.to_thread(_safe_resolve, r, host, "A")
+        aaaa, aaae = await asyncio.to_thread(_safe_resolve, r, host, "AAAA")
         glue[host] = {
             "A": a or [],
             "A_error": ae,

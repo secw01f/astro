@@ -17,9 +17,10 @@ class CreateUser(BaseModel):
 
 class CreateUserResponse(BaseModel):
     user: UserPublic
-    reset_token: str
+    temporary_password: Optional[str] = None
 
 class ResetPassword(BaseModel):
+    token: str
     new_password: str
 
 class UpdateUser(BaseModel):
@@ -32,3 +33,4 @@ class UpdateMe(BaseModel):
     username: Optional[str] = None
     email: Optional[str] = None
     new_password: Optional[str] = None
+    current_password: Optional[str] = None

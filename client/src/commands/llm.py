@@ -13,6 +13,7 @@ def list_llms(ctx: click.Context):
     response = client.get("/llm/llms")
     if response.status_code != 200:
         click.echo(f"Failed to list LLMs: {response.text}")
+        return
 
     llms = response.json()["llms"]
 
@@ -31,6 +32,9 @@ def list_llms(ctx: click.Context):
 def get_llm_by_id(ctx: click.Context, id: int):
     client = ctx.obj["client"]
     response = client.get(f"/llm/{id}")
+    if response.status_code != 200:
+        click.echo(f"Failed to get LLM: {response.text}")
+        return
 
     llm = response.json()["llm"]
     if not llm:
@@ -77,11 +81,13 @@ def create(ctx: click.Context, name: str, provider: str, model: str, max_tokens:
 @llms.command(name="update", help="Update a LLM")
 @click.pass_context
 @click.option("--name", type=str, required=False, help="The name of the LLM")
-@click.option("--provider", type=click.Choice(["anthropic", "openai", "bedrock"]), required=True, help="The provider of the LLM")
+@click.option("--provider", type=click.Choice(["anthropic", "openai", "bedrock"]), required=False, help="The provider of the LLM")
 @click.option("--model", type=str, required=False, help="The model of the LLM")
 @click.option("--max-tokens", type=int, required=False, help="The max tokens of the LLM")
+@click.option("--key-id", type=str, required=False, help="The Bedrock access key id")
+@click.option("--region", type=str, required=False, help="The Bedrock region")
 @click.argument("id", type=click.INT)
-def update_llm(ctx: click.Context, id: int, name: str | None = None, provider: str | None = None, model: str | None = None, max_tokens: int | None = None, key: str | None = None):
+def update_llm(ctx: click.Context, id: int, name: str | None = None, provider: str | None = None, model: str | None = None, max_tokens: int | None = None, key_id: str | None = None, region: str | None = None, key: str | None = None):
     if not key:
         update_prompt = click.prompt("Update Key? (Y/n)", type=str, default="n")
         if update_prompt.strip().lower() == "y":
@@ -99,8 +105,12 @@ def update_llm(ctx: click.Context, id: int, name: str | None = None, provider: s
         payload["provider"] = provider
     if model:
         payload["model"] = model
-    if max_tokens:
+    if max_tokens is not None:
         payload["max_tokens"] = max_tokens
+    if key_id:
+        payload["key_id"] = key_id
+    if region:
+        payload["region"] = region
 
     response = client.patch(f"/llm/{id}", json=payload)
     if response.status_code != 200:

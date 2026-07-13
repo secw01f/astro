@@ -1,11 +1,13 @@
 import jwt
+import asyncio
+import hashlib
 import secrets
 import string
 import redis.asyncio as redis
-import uuid
 
 from settings import settings
 from src.db.models import User, UserPublic
+from src.db.db import session_dep
 from lib.auth.enums import Role
 
 from fastapi import HTTPException, Depends, Request
@@ -15,24 +17,60 @@ from pwdlib import PasswordHash
 from datetime import datetime, timedelta, timezone
 
 api_key_header = APIKeyHeader(name="X-API-KEY")
-PASSWORD_RESET_REQUIRED_PREFIX = "auth:password_reset_required"
 PASSWORD_RESET_TOKEN_PREFIX = "auth:password_reset_token"
+PASSWORD_RESET_ATTEMPT_PREFIX = "auth:password_reset_attempts"
 
-def verify_token(request: Request, token: str = Depends(api_key_header)):
-    token = token
 
+def validate_password_strength(password: str) -> None:
+    if len(password) < 12:
+        raise HTTPException(status_code=422, detail="Password must be at least 12 characters")
+    checks = (
+        any(c.islower() for c in password),
+        any(c.isupper() for c in password),
+        any(c.isdigit() for c in password),
+        any(c in string.punctuation for c in password),
+    )
+    if not all(checks):
+        raise HTTPException(
+            status_code=422,
+            detail="Password must include lowercase, uppercase, number, and symbol characters",
+        )
+
+async def verify_token(request: Request, session: session_dep, token: str = Depends(api_key_header)):
     if not token:
         raise HTTPException(status_code=401, detail="No token provided")
 
     try:
-        claims = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
-        request.state.claims = claims
+        claims = jwt.decode(
+            token,
+            settings.JWT_SECRET_KEY,
+            algorithms=["HS256"],
+            audience=settings.JWT_AUDIENCE,
+            issuer=settings.JWT_ISSUER,
+        )
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token has expired")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-def create_token(user_id: int, role: Role, expires_in: int | None = None) -> str:
+    user_id = claims.get("id")
+    token_version = claims.get("token_version")
+    if user_id is None or token_version is None:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    user = await session.get(User, int(user_id))
+    if not user or not user.enabled:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    if int(token_version) != int(user.token_version):
+        raise HTTPException(status_code=401, detail="Token has been revoked")
+
+    request.state.claims = {
+        "id": user.id,
+        "role": user.role.value,
+        "token_version": user.token_version,
+    }
+
+def create_token(user_id: int, role: Role, token_version: int, expires_in: int | None = None) -> str:
     if expires_in is not None:
         expires_in = int(expires_in)
     else:
@@ -40,8 +78,11 @@ def create_token(user_id: int, role: Role, expires_in: int | None = None) -> str
     return jwt.encode({
         "id": user_id,
         "exp": datetime.now(timezone.utc) + timedelta(minutes=expires_in),
-        "role": role.value
-    }, settings.SECRET_KEY, algorithm="HS256")
+        "iss": settings.JWT_ISSUER,
+        "aud": settings.JWT_AUDIENCE,
+        "role": role.value,
+        "token_version": token_version,
+    }, settings.JWT_SECRET_KEY, algorithm="HS256")
 
 def generate_password(length: int):
     upper = string.ascii_uppercase
@@ -62,55 +103,45 @@ def generate_password(length: int):
     secrets.SystemRandom().shuffle(password)
     return "".join(password)
 
-def _password_reset_key(user_id: int) -> str:
-    return f"{PASSWORD_RESET_REQUIRED_PREFIX}:{user_id}"
-
-async def set_password_reset_required(user_id: int) -> None:
-    if not settings.REDIS_URL:
-        return
-    client = redis.from_url(settings.REDIS_URL, decode_responses=True)
-    try:
-        await client.set(_password_reset_key(user_id), "1")
-    finally:
-        await client.aclose()
-
-async def clear_password_reset_required(user_id: int) -> None:
-    if not settings.REDIS_URL:
-        return
-    client = redis.from_url(settings.REDIS_URL, decode_responses=True)
-    try:
-        await client.delete(_password_reset_key(user_id))
-    finally:
-        await client.aclose()
-
-async def password_reset_required(user_id: int) -> bool:
-    if not settings.REDIS_URL:
-        return False
-    client = redis.from_url(settings.REDIS_URL, decode_responses=True)
-    try:
-        value = await client.get(_password_reset_key(user_id))
-        return value == "1"
-    finally:
-        await client.aclose()
-
 async def reset_password(session: AsyncSession, user_id: int, new_password: str) -> None:
+    validate_password_strength(new_password)
     pwhash = PasswordHash.recommended()
-    password_hash = pwhash.hash(new_password)
+    password_hash = await asyncio.to_thread(pwhash.hash, new_password)
     user = await session.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     user.password = password_hash
+    user.token_version += 1
     await session.commit()
-    await clear_password_reset_required(user_id)
+
+
+def _token_digest(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
 
 def _password_reset_token_key(token: str) -> str:
-    return f"{PASSWORD_RESET_TOKEN_PREFIX}:{token}"
+    return f"{PASSWORD_RESET_TOKEN_PREFIX}:{_token_digest(token)}"
+
+
+async def check_password_reset_rate_limit(token: str) -> None:
+    if not settings.REDIS_URL:
+        return
+    client = redis.from_url(settings.REDIS_URL, decode_responses=True)
+    try:
+        key = f"{PASSWORD_RESET_ATTEMPT_PREFIX}:{_token_digest(token)}"
+        attempts = await client.incr(key)
+        if attempts == 1:
+            await client.expire(key, 300)
+        if attempts > 5:
+            raise HTTPException(status_code=429, detail="Too many password reset attempts")
+    finally:
+        await client.aclose()
 
 async def create_password_reset_token(user_id: int, ttl_seconds: int | None = None) -> str:
     if not settings.REDIS_URL:
         raise HTTPException(status_code=500, detail="Password reset token storage is not configured")
 
-    token = str(uuid.uuid4())
+    token = secrets.token_urlsafe(32)
     ttl = ttl_seconds if ttl_seconds is not None else max(60, int(settings.DEFAULT_EXP_MINUTES) * 60)
     client = redis.from_url(settings.REDIS_URL, decode_responses=True)
     try:
@@ -140,13 +171,10 @@ async def delete_password_reset_token(token: str) -> None:
     finally:
         await client.aclose()
 
-async def password_reset_token_valid(user_id: int, token: str) -> bool:
-    token_user_id = await get_password_reset_token_user_id(token)
-    return token_user_id == user_id
-
 async def create_user(session: AsyncSession, username: str, email: str, password: str, role: Role = Role.USER) -> UserPublic:
+    validate_password_strength(password)
     pwhash = PasswordHash.recommended()
-    password_hash = pwhash.hash(password)
+    password_hash = await asyncio.to_thread(pwhash.hash, password)
     user = User(username=username, email=email, password=password_hash, role=role)
     session.add(user)
     await session.commit()

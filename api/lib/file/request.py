@@ -75,6 +75,7 @@ class FileRunSession:
 
 
 class FileRunRegistry:
+    # Process-local by design: api/entrypoint.sh pins uvicorn to one worker.
     _sessions: dict[str, FileRunSession] = {}
 
     @classmethod

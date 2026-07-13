@@ -51,6 +51,9 @@ def astro(ctx: click.Context):
 @astro.result_callback()
 @click.pass_context
 def close_client(ctx: click.Context, *_args, **_kwargs):
+    client = ctx.obj.get("client")
+    if client is not None:
+        client.close()
     async_client = ctx.obj.get("async_client")
     if async_client is not None:
         try:

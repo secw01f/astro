@@ -10,7 +10,7 @@ DEFAULT_STACK_USER = "stack"
 
 def _check_api(url: str) -> tuple[bool, str]:
     try:
-        response = httpx.get(f"{url.rstrip('/')}/openapi.json", timeout=5.0)
+        response = httpx.get(f"{url.rstrip('/')}/health", timeout=5.0)
     except httpx.ConnectError:
         return False, "Could not connect. Is the API running?"
     except httpx.TimeoutException:
@@ -58,38 +58,16 @@ def _create_user(
     username: str,
     email: str,
     role: str,
-) -> tuple[bool, str, str | None]:
+    password: str | None,
+) -> tuple[bool, str]:
+    payload = {"username": username, "email": email, "role": role}
+    if password is not None:
+        payload["password"] = password
     try:
         response = httpx.post(
             f"{url.rstrip('/')}/auth/user/create",
             headers={"X-API-KEY": admin_token},
-            json={"username": username, "email": email, "role": role},
-            timeout=30.0,
-        )
-    except httpx.ConnectError:
-        return False, "Could not connect to the API.", None
-    except httpx.HTTPError as exc:
-        return False, str(exc), None
-
-    if response.status_code != 200:
-        detail = response.text
-        try:
-            detail = response.json().get("detail", detail)
-        except Exception:
-            pass
-        return False, f"Failed to create user: {detail}", None
-
-    reset_token = response.json().get("reset_token")
-    if not reset_token:
-        return False, "User created but no reset token was returned.", None
-    return True, "User created.", reset_token
-
-def _reset_password(url: str, reset_token: str, new_password: str) -> tuple[bool, str]:
-    try:
-        response = httpx.post(
-            f"{url.rstrip('/')}/auth/user/reset-password",
-            params={"token": reset_token},
-            json={"new_password": new_password},
+            json=payload,
             timeout=30.0,
         )
     except httpx.ConnectError:
@@ -103,8 +81,9 @@ def _reset_password(url: str, reset_token: str, new_password: str) -> tuple[bool
             detail = response.json().get("detail", detail)
         except Exception:
             pass
-        return False, f"Password reset failed: {detail}"
-    return True, "Password set successfully."
+        return False, f"Failed to create user: {detail}"
+
+    return True, "User created."
 
 def _prompt_new_password() -> str:
     while True:
@@ -120,6 +99,7 @@ def _setup_permanent_user(
     *,
     yes: bool,
     skip_create_user: bool,
+    role: str,
 ) -> bool:
     if skip_create_user:
         return False
@@ -139,28 +119,17 @@ def _setup_permanent_user(
     new_username = click.prompt("Username")
     new_email = click.prompt("Email")
     if yes:
-        new_role = "admin"
+        new_role = role
     else:
-        new_role = click.prompt("Role", type=click.Choice(["admin", "user"]), default="admin")
+        new_role = click.prompt("Role", type=click.Choice(["admin", "user"]), default=role)
 
-    success, message, reset_token = _create_user(
-        api_url, admin_token, new_username, new_email, new_role
+    new_password = _prompt_new_password()
+
+    success, message = _create_user(
+        api_url, admin_token, new_username, new_email, new_role, new_password
     )
     if not success:
         click.echo(red(message, "bold"))
-        raise SystemExit(1)
-    click.echo(green(message, "bold"))
-
-    new_password = _prompt_new_password()
-    success, message = _reset_password(api_url, reset_token, new_password)
-    if not success:
-        click.echo(red(message, "bold"))
-        click.echo(
-            white(
-                f"Finish setup with: astro auth reset-password --token {reset_token}",
-                "normal",
-            )
-        )
         raise SystemExit(1)
     click.echo(green(message, "bold"))
 
@@ -185,12 +154,14 @@ def _setup_permanent_user(
     help="Do not create a permanent user after logging in as stack",
 )
 @click.option("-y", "--yes", is_flag=True, help="Accept defaults without prompts where possible")
+@click.option("--role", type=click.Choice(["admin", "user"]), default="user", help="Role for permanent user creation")
 def init(
     url: str | None,
     username: str | None,
     skip_login: bool,
     skip_create_user: bool,
     yes: bool,
+    role: str,
 ):
     click.echo(banner())
     click.echo(green("Welcome to ASTRO setup", "bold"))
@@ -282,6 +253,7 @@ def init(
             token,
             yes=yes,
             skip_create_user=skip_create_user,
+            role=role,
         )
 
     _print_next_steps(logged_in=True, permanent_user_created=permanent_user_created)

@@ -1,11 +1,14 @@
 import asyncio
+import logging
 
 from fastapi import APIRouter, HTTPException
+from pydantic import ValidationError
 
 from lib.models import ToolsResponse, Tool, ExecTool, ExecResponse
 from src.web.tools import Registry
 
 web_router = APIRouter(prefix="/web")
+logger = logging.getLogger(__name__)
 
 @web_router.get("/tools")
 async def list_tools() -> ToolsResponse:
@@ -28,15 +31,17 @@ async def exec_tool(exec: ExecTool):
         raise HTTPException(status_code=404, detail="Tool not found")
 
     try:
+        tool_input = tool.input(**exec.arguments)
         result = await asyncio.wait_for(
-            tool.func(tool.input(**exec.arguments)),
+            tool.func(tool_input),
             timeout=30
         )
 
         return ExecResponse(result=result)
-    
+    except ValidationError:
+        return ExecResponse(result=None, error="Invalid tool arguments")
+    except asyncio.TimeoutError:
+        return ExecResponse(result=None, error="Tool execution timed out")
     except Exception as e:
-        return ExecResponse(
-            result=None,
-            error=str(e)
-        )
+        logger.exception("Unexpected web tool failure: %s", exec.tool)
+        raise HTTPException(status_code=500, detail="Tool execution failed") from e

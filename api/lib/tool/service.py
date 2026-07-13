@@ -155,7 +155,7 @@ async def delete_toolset_user_credentials(session: AsyncSession, toolset_id: int
     await session.flush()
 
 
-async def delete_toolset_record(session: AsyncSession, toolset: ToolSet) -> None:
+async def delete_toolset_record(session: AsyncSession, toolset: ToolSet, *, commit: bool = True) -> None:
     statement = select(AgentToolSetLink).where(AgentToolSetLink.toolset_id == toolset.id)
     result = await session.exec(statement)
     for link in result.all():
@@ -177,4 +177,5 @@ async def delete_toolset_record(session: AsyncSession, toolset: ToolSet) -> None
     await delete_toolset_user_credentials(session, toolset.id)
     await session.flush()
     await session.delete(toolset)
-    await session.commit()
+    if commit:
+        await session.commit()

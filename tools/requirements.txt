@@ -1,8 +1,9 @@
-fastapi
-uvicorn
-lark
-duckduckgo-api-haystack
-python-nmap
-python-dotenv
-cvss
-dnspython
+fastapi>=0.115,<1
+uvicorn>=0.34,<1
+lark>=1.2,<2
+duckduckgo-api-haystack>=0.1,<1
+python-nmap>=0.7,<1
+python-dotenv>=1.0,<2
+cvss>=3.2,<4
+dnspython>=2.7,<3
+redis>=5,<7

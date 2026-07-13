@@ -13,12 +13,29 @@ def _user_dir(user_id: int) -> Path:
     return _FILES_ROOT / str(user_id)
 
 
+def _validate_file_id(file_id: str) -> str:
+    try:
+        return str(uuid.UUID(file_id))
+    except ValueError as exc:
+        raise ValueError("Invalid file_id") from exc
+
+
+def _safe_user_path(user_id: int, filename: str) -> Path:
+    root = _user_dir(user_id).resolve()
+    path = (root / filename).resolve()
+    if root != path.parent:
+        raise ValueError("Invalid file path")
+    return path
+
+
 def _meta_path(user_id: int, file_id: str) -> Path:
-    return _user_dir(user_id) / f"{file_id}.json"
+    safe_id = _validate_file_id(file_id)
+    return _safe_user_path(user_id, f"{safe_id}.json")
 
 
 def _data_path(user_id: int, file_id: str) -> Path:
-    return _user_dir(user_id) / f"{file_id}.bin"
+    safe_id = _validate_file_id(file_id)
+    return _safe_user_path(user_id, f"{safe_id}.bin")
 
 
 def save_user_file(
@@ -59,8 +76,11 @@ def list_user_files(user_id: int) -> list[dict]:
 
 
 def get_user_file(user_id: int, file_id: str) -> tuple[dict, bytes] | None:
-    meta_path = _meta_path(user_id, file_id)
-    data_path = _data_path(user_id, file_id)
+    try:
+        meta_path = _meta_path(user_id, file_id)
+        data_path = _data_path(user_id, file_id)
+    except ValueError:
+        return None
     if not meta_path.is_file() or not data_path.is_file():
         return None
     try:

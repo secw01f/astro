@@ -187,11 +187,12 @@ async def set_user_toolset_credential(
             if credential.user_id != user_id:
                 raise HTTPException(status_code=403, detail="Credential does not belong to the current user")
             credential.token = encrypt_token(token_plain)
+            credential.crypto_version = 2
             session.add(credential)
             await session.commit()
             return
 
-    credential = Credential(token=encrypt_token(token_plain), user_id=user_id)
+    credential = Credential(token=encrypt_token(token_plain), user_id=user_id, crypto_version=2)
     session.add(credential)
     await session.flush()
     link = UserToolSetCredential(

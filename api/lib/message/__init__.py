@@ -6,20 +6,37 @@ from fastapi import HTTPException
 
 from src.db.models import Message, Stack
 
-async def event_stream(queue: asyncio.Queue):
-    while True:
-        item = await queue.get()
+async def event_stream(queue: asyncio.Queue, closed: asyncio.Event | None = None):
+    try:
+        while True:
+            item = await queue.get()
 
-        if item is None:
-            break
+            if item is None:
+                break
 
-        yield f"data: {json.dumps(item)}\n\n"
+            yield f"data: {json.dumps(item)}\n\n"
+    finally:
+        if closed is not None:
+            closed.set()
+
+
+async def _persist_message(session, stack_id: int, user_id: int, role: str, content: str) -> None:
+    pos = await next_position(session, stack_id, user_id)
+    session.add(
+        Message(
+            role=role,
+            content=content,
+            stack_id=stack_id,
+            position=pos,
+        )
+    )
+    await session.commit()
 
 async def storage_consumer(
     queue: asyncio.Queue,
     session,
     stack_id: int,
-    position_state: dict[str, int],
+    user_id: int,
 ):
     messages = {}
 
@@ -38,8 +55,6 @@ async def storage_consumer(
         elif item["type"] == "response":
             messages[key] = item.get("content") or ""
         elif item["type"] == "tool_result":
-            pos = position_state["next"]
-            position_state["next"] = pos + 1
             payload = {
                 "kind": "tool_result",
                 "agent": item.get("agent"),
@@ -52,32 +67,22 @@ async def storage_consumer(
                 "finish_reason": item.get("finish_reason"),
                 "timestamp": item.get("timestamp"),
             }
-            session.add(
-                Message(
-                    role="tool",
-                    content=json.dumps(payload, default=str),
-                    stack_id=stack_id,
-                    position=pos,
-                )
-            )
-            await session.commit()
+            await _persist_message(session, stack_id, user_id, "tool", json.dumps(payload, default=str))
         elif item["type"] == "end":
             full_message = messages.get(key, "")
-
-            pos = position_state["next"]
-            position_state["next"] = pos + 1
-
-            session.add(
-                Message(
-                    role="assistant",
-                    content=full_message,
-                    stack_id=stack_id,
-                    position=pos,
-                )
-            )
-
-            await session.commit()
+            await _persist_message(session, stack_id, user_id, "assistant", full_message)
             messages.pop(key, None)
+
+    for full_message in messages.values():
+        if full_message:
+            await _persist_message(session, stack_id, user_id, "assistant", full_message)
+
+
+def _try_put_nowait(queue: asyncio.Queue, item) -> None:
+    try:
+        queue.put_nowait(item)
+    except asyncio.QueueFull:
+        pass
 
 async def fanout(
     source: asyncio.Queue,
@@ -87,12 +92,14 @@ async def fanout(
     storage_only_types: frozenset[str] = frozenset({"response"}),
     verbose: bool = True,
     supervisor_agent_name: str | None = None,
+    client_closed: asyncio.Event | None = None,
 ):
     while True:
         item = await source.get()
 
         if item is None:
-            await client_queue.put(item)
+            if client_closed is None or not client_closed.is_set():
+                _try_put_nowait(client_queue, item)
             await storage_queue.put(item)
             break
 
@@ -106,11 +113,11 @@ async def fanout(
             agent_name = item.get("agent") if isinstance(item, dict) else None
             if agent_name != supervisor_agent_name:
                 to_client = False
-        if to_client:
-            await client_queue.put(item)
+        if to_client and (client_closed is None or not client_closed.is_set()):
+            _try_put_nowait(client_queue, item)
         await storage_queue.put(item)
 
-async def next_position(session, stack_id: int, user_id: str) -> int:
+async def next_position(session, stack_id: int, user_id: int) -> int:
     stmt = (
         select(Stack)
         .where(Stack.id == stack_id, Stack.user_id == user_id)
