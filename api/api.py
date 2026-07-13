@@ -137,10 +137,6 @@ async def _sync_default_http_toolset(session, name: str, description: str, path:
 async def startup_event():
     logger.info("API startup initiated")
 
-    if settings.SECRET_KEY == "supersecretkey" or settings.SECRET_KEY == "" or settings.SECRET_KEY is None or len(settings.SECRET_KEY) < 64:
-        logger.error("SECRET_KEY is not set or insecure")
-        raise SystemExit("SECRET_KEY is not set or insecure")
-
     logger.info("Initializing the database")
     await init_db()
     logger.info("Database initialized")

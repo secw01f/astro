@@ -71,9 +71,9 @@ def _create_user(
             timeout=30.0,
         )
     except httpx.ConnectError:
-        return False, "Could not connect to the API.", None
+        return False, "Could not connect to the API."
     except httpx.HTTPError as exc:
-        return False, str(exc), None
+        return False, str(exc)
 
     if response.status_code != 200:
         detail = response.text
