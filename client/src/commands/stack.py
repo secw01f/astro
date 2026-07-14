@@ -1,11 +1,9 @@
 import click
-import asyncio
 
-from lib.color import cyan, green, magenta, red, white
+from lib.color import cyan, green, red, white
 from lib.wizard import select_many_ids, select_one
 
 from lib.stack import (
-    chat_loop,
     format_duration,
     format_recurrence_day,
     format_schedule,
@@ -16,6 +14,7 @@ from lib.stack import (
     parse_run_times,
     WEEKDAY_NAMES,
 )
+from src.tui.stack_exec import StackExecApp
 
 def _return_stack(stack: dict) -> None:
     click.echo(
@@ -24,20 +23,6 @@ def _return_stack(stack: dict) -> None:
         f"{cyan('Description:', 'bold')} {stack['description']}\n"
         f"{cyan('Created:', 'bold')} {stack['created']}"
     )
-
-_chat_commands = {
-    "/exit": "Quit the chat",
-    "/quit": "Quit the chat",
-    "/q": "Quit the chat",
-    "/clear": "Clear the terminal screen",
-    "/history": "Show the chat history",
-    "/help": "Show the help",
-    "/h": "Show the help",
-    "/info": "Show the Stack info",
-    "/i": "Show the Stack info",
-    "/f": "Upload a file for a pending agent request (requires request id and run id)",
-    "/file": "Upload a file for a pending agent request (requires request id and run id)",
-}
 
 @click.group(help="Manage ASTRO stacks")
 def stacks():
@@ -204,10 +189,6 @@ def execute_stack(ctx: click.Context, id: int, verbose: bool):
     user_response = sync_client.get("/auth/user/me")
     user = user_response.json()["user"]
     username = user["username"]
-    
-    if verbose:
-        click.echo(green("Verbose output enabled", "bold"))
-        click.echo("")
 
     stack_response = sync_client.get(f"/stack/{id}")
     if stack_response.status_code != 200:
@@ -218,27 +199,22 @@ def execute_stack(ctx: click.Context, id: int, verbose: bool):
     agents = stack.get("agents") or []
     supervisors = [a for a in agents if a.get("agent_type") == "supervisor"]
     name = supervisors[0]["name"] if supervisors else stack["name"]
+    supporting_names = [a["name"] for a in agents if a.get("agent_type") == "supporting"]
 
-    click.echo(green("____________________________________________________________", "bold"))
-    click.echo(f"{green('Stack:', 'bold')} {stack['name']}")
-    click.echo(f"{green('Description:', 'bold')} {stack['description']}")
-    click.echo(f"{green('Created:', 'bold')} {stack['created']}")
-    click.echo("")
-    click.echo(f"{green('Supervisor:', 'bold')} {supervisors[0]['name']}")
-    click.echo(f"{green('Supporting:', 'bold')} {', '.join([a['name'] for a in agents if a.get('agent_type') == 'supporting'])}")
-    click.echo(green("____________________________________________________________", "bold"))
-    click.echo("")
+    url = ctx.obj["url"]
+    token = sync_client.headers.get("X-API-KEY")
 
-    asyncio.run(
-        chat_loop(
-            ctx,
-            id,
-            name,
-            verbose=verbose,
-            username=username,
-            chat_commands=_chat_commands,
-        )
-    )
+    StackExecApp(
+        base_url=url,
+        token=token,
+        stack_id=id,
+        stack_name=stack["name"],
+        stack_description=stack.get("description") or "",
+        supervisor_name=name,
+        supporting_names=supporting_names,
+        username=username,
+        verbose=verbose,
+    ).run()
 
     click.echo("")
     click.echo(white("Exiting chat...", "bold"))
