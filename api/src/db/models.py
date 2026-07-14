@@ -4,13 +4,14 @@ from typing import Any, List, Optional
 
 from pydantic import BaseModel, model_validator
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Enum as SAEnum
+from sqlalchemy import Enum as SAEnum, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 
 from lib.llm.enums import Provider
 from lib.agent.enums import AgentRole, AgentType
 from lib.tool.enums import ToolType, AuthType
 from lib.auth.enums import Role
+from lib.stack.models import StackScheduleRunStatus, StackScheduleTimeStatus, StackScheduleType, StackScheduleRecurrence
 
 _AGENT_ROLE_PG = SAEnum(
     AgentRole,
@@ -20,6 +21,26 @@ _AGENT_ROLE_PG = SAEnum(
 _AGENT_TYPE_PG = SAEnum(
     AgentType,
     name="agenttype",
+    values_callable=lambda cls: [m.value for m in cls],
+)
+_STACK_SCHEDULE_RUN_STATUS_PG = SAEnum(
+    StackScheduleRunStatus,
+    name="stackschedulerunstatus",
+    values_callable=lambda cls: [m.value for m in cls],
+)
+_STACK_SCHEDULE_TYPE_PG = SAEnum(
+    StackScheduleType,
+    name="stackscheduletype",
+    values_callable=lambda cls: [m.value for m in cls],
+)
+_STACK_SCHEDULE_RECURRENCE_PG = SAEnum(
+    StackScheduleRecurrence,
+    name="stackschedulerecurrence",
+    values_callable=lambda cls: [m.value for m in cls],
+)
+_STACK_SCHEDULE_TIME_STATUS_PG = SAEnum(
+    StackScheduleTimeStatus,
+    name="stackscheduletimestatus",
     values_callable=lambda cls: [m.value for m in cls],
 )
 
@@ -189,8 +210,68 @@ class Stack(StackBase, table=True):
     user: Optional["User"] = Relationship(back_populates="stacks")
     agents: List["Agent"] = Relationship(back_populates="stacks", link_model=AgentStackLink)
     messages: List["Message"] = Relationship(back_populates="stack")
+    schedules: List["StackSchedule"] = Relationship(back_populates="stack")
     last_position: int = Field(default=-1)
     created: datetime = Field(default_factory=datetime.utcnow)
+
+class StackSchedule(SQLModel, table=True):
+    __tablename__ = "stack_schedule"
+    id: int | None = Field(default=None, primary_key=True)
+    name: str
+    stack_id: int = Field(foreign_key="stack.id", index=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    message: str = Field(sa_column=Column(Text, nullable=False))
+    schedule_type: StackScheduleType = Field(
+        default=StackScheduleType.INTERVAL,
+        sa_column=Column(_STACK_SCHEDULE_TYPE_PG),
+    )
+    interval_seconds: int | None = Field(default=None)
+    recurrence: StackScheduleRecurrence | None = Field(
+        default=None,
+        sa_column=Column(_STACK_SCHEDULE_RECURRENCE_PG),
+    )
+    recurrence_day: int | None = Field(default=None)
+    recurrence_hour: int = Field(default=0)
+    recurrence_minute: int = Field(default=0)
+    enabled: bool = Field(default=True)
+    verbose: bool = Field(default=False)
+    last_run_at: datetime | None = Field(default=None)
+    next_run_at: datetime
+    created: datetime = Field(default_factory=datetime.utcnow)
+    stack: Optional["Stack"] = Relationship(back_populates="schedules")
+    runs: List["StackScheduleRun"] = Relationship(back_populates="schedule")
+    times: List["StackScheduleTime"] = Relationship(back_populates="schedule")
+
+class StackScheduleTime(SQLModel, table=True):
+    __tablename__ = "stack_schedule_time"
+    id: int | None = Field(default=None, primary_key=True)
+    schedule_id: int = Field(foreign_key="stack_schedule.id", index=True)
+    run_at: datetime = Field(index=True)
+    status: StackScheduleTimeStatus = Field(
+        default=StackScheduleTimeStatus.PENDING,
+        sa_column=Column(_STACK_SCHEDULE_TIME_STATUS_PG),
+    )
+    created: datetime = Field(default_factory=datetime.utcnow)
+    schedule: Optional["StackSchedule"] = Relationship(back_populates="times")
+    runs: List["StackScheduleRun"] = Relationship(back_populates="schedule_time")
+
+class StackScheduleRun(SQLModel, table=True):
+    __tablename__ = "stack_schedule_run"
+    id: int | None = Field(default=None, primary_key=True)
+    schedule_id: int = Field(foreign_key="stack_schedule.id", index=True)
+    schedule_time_id: int | None = Field(default=None, foreign_key="stack_schedule_time.id", index=True)
+    stack_id: int = Field(foreign_key="stack.id", index=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    run_id: str = Field(index=True)
+    status: StackScheduleRunStatus = Field(sa_column=Column(_STACK_SCHEDULE_RUN_STATUS_PG))
+    result: str | None = Field(default=None, sa_column=Column(Text))
+    error: str | None = Field(default=None, sa_column=Column(Text))
+    message_start_id: int | None = Field(default=None)
+    message_end_id: int | None = Field(default=None)
+    started_at: datetime = Field(default_factory=datetime.utcnow)
+    completed_at: datetime | None = Field(default=None)
+    schedule: Optional["StackSchedule"] = Relationship(back_populates="runs")
+    schedule_time: Optional["StackScheduleTime"] = Relationship(back_populates="runs")
 
 class StackPublic(StackBase):
     id: int
@@ -329,6 +410,9 @@ class MessageBase(SQLModel):
     position: int
 
 class Message(MessageBase, table=True):
+    __table_args__ = (
+        UniqueConstraint("stack_id", "position", name="uq_message_stack_position"),
+    )
     id: int | None = Field(default=None, primary_key=True)
     stack_id: int = Field(foreign_key="stack.id", index=True)
     stack: List["Stack"] = Relationship(back_populates="messages")

@@ -20,5 +20,9 @@ celery.conf.beat_schedule = {
     "heartbeat": {
         "task": "src.celery.tasks.heartbeat",
         "schedule": 120.0,
-    }
+    },
+    "process-due-stack-schedules": {
+        "task": "src.celery.tasks.process_due_stack_schedules",
+        "schedule": 60.0,
+    },
 }

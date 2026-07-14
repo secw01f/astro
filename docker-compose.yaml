@@ -16,6 +16,12 @@ services:
     env_file:
       - .env
     entrypoint: ["/bin/bash", "entrypoint.sh"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
     volumes:
       - specs:/api/specs
       - logs:/var/log/astro
@@ -57,21 +63,31 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: api
     env_file: .env
     depends_on:
+      db:
+        condition: service_healthy
       redis:
         condition: service_started
-    command: ["celery", "--app", "src.celery:celery", "worker", "--loglevel=info"]
+      api:
+        condition: service_healthy
+    command: ["python", "-m", "celery", "--app", "src.celery:celery", "worker", "--loglevel=info"]
 
   celery-beat:
     build:
       context: .
       dockerfile: Dockerfile
+      target: api
     env_file: .env
     depends_on:
+      db:
+        condition: service_healthy
       redis:
         condition: service_started
-    command: ["celery", "--app", "src.celery:celery", "beat", "--loglevel=info"]
+      api:
+        condition: service_healthy
+    command: ["python", "-m", "celery", "--app", "src.celery:celery", "beat", "--loglevel=info"]
 
 volumes:
   dbdata:

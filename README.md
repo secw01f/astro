@@ -96,9 +96,12 @@ flowchart LR
 
 | Component | Role |
 |-----------|------|
-| **api** | Agent orchestration, workflow execution, LLM coordination |
+| **api** | Agent orchestration, workflow execution, LLM coordination, DB migrations |
 | **db** | Persistent memory + vector context (pgvector) |
 | **tools** | MCP/API-exposed tooling for agent execution |
+| **redis** | Message broker/result backend for Celery |
+| **celery** | Background worker that executes scheduled stack runs |
+| **celery-beat** | Scheduler that dispatches due stack schedules |
 | **cli** | Local interface to run workflows and interact with agents |
 
 ---
@@ -148,24 +151,36 @@ For JWT issuance, namespace setup, and run instructions, see the [template READM
 From the repository root:
 
 ```bash
-cp .env.example .env
-python3 -c 'import secrets; print(secrets.token_urlsafe(48))'
-```
-
-Change the value of `SECRET_KEY` in the `.env` to the value returned by the `python3` command above.
-
-```bash
 chmod +x deploy.sh
 ./deploy.sh
 ```
 
 This will:
 
-1. Build and start:
-   - API
+1. Create `.env` from `.env.example` if missing, and generate secure values for any
+   secrets that aren't set yet (`SECRET_KEY` and `CREDENTIAL_ENCRYPTION_KEY`).
+2. Build and start the services:
+   - API (runs database migrations on startup)
    - Tools service
-   - Database
-2. Install the CLI via **pipx** or local **venv**
+   - Database (PostgreSQL + pgvector)
+   - Redis, Celery worker, and Celery beat (scheduled runs)
+3. Install the CLI via **pipx** or local **venv**
+
+### Secrets
+
+`deploy.sh` generates these automatically, but you can set them yourself in `.env`:
+
+- **`SECRET_KEY`** — signs JWTs. Can be rotated freely.
+  ```bash
+  python3 -c 'import secrets; print(secrets.token_urlsafe(48))'
+  ```
+- **`CREDENTIAL_ENCRYPTION_KEY`** — encrypts stored credentials (a Fernet key). Rotating
+  it invalidates existing credentials unless you re-encrypt first:
+  ```bash
+  python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+  # To rotate, from the api container:
+  #   python -m src.scripts.reencrypt_credentials --old-key <OLD_KEY>
+  ```
 
 ---
 
@@ -192,6 +207,26 @@ Update values like:
 
 - `DB_URL`
 - `DEFAULT_TOOLS_BASE_URL`
+
+---
+
+### Database migrations
+
+The schema is managed with **Alembic** (`api/migrations/`). The `api` container runs
+`alembic upgrade head` on startup (see `api/entrypoint.sh`), so migrations are applied
+automatically and Celery waits for the API to become healthy before starting.
+
+To add a schema change:
+
+```bash
+# 1. Edit the SQLModel models in api/src/db/models.py
+# 2. Generate a migration (from the api container)
+docker compose exec api alembic revision --autogenerate -m "describe change"
+# 3. Review the generated file in api/migrations/versions/, then commit it
+```
+
+Adopting Alembic on a pre-existing database (one created before migrations existed)?
+Baseline it once with `docker compose exec api alembic stamp head`.
 
 ---
 
@@ -233,6 +268,8 @@ Environment variables override the config file:
 | Agents | `astro agent list` |
 | Tools | `astro tool list` |
 | LLMs | `astro llm list` |
+| Stacks | `astro stacks list`, `astro stacks exec` |
+| Scheduled runs | `astro stacks schedule create`, `astro stacks schedule runs`, `astro stacks schedule run` |
 | Docs | `astro docs` |
 
 ![cli-screenshot](img/astro-screenshot.png)

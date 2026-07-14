@@ -14,3 +14,5 @@ asyncpg
 pgvector[all]
 httpx
 redis
+celery
+alembic

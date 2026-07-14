@@ -3,6 +3,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     DB_URL: str
     SECRET_KEY: str
+    CREDENTIAL_ENCRYPTION_KEY: str
     DEFAULT_TOOLS_BASE_URL: str
     DEFAULT_EXP_MINUTES: int
     ENV: str

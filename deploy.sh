@@ -10,6 +10,72 @@ if ! command -v python3 &> /dev/null; then
   exit 1
 fi
 
+echo "Ensuring secrets are configured in .env..."
+python3 - <<'PY'
+import base64
+import os
+import pathlib
+import secrets
+
+env_path = pathlib.Path(".env")
+example_path = pathlib.Path(".env.example")
+
+if not env_path.exists():
+    if example_path.exists():
+        env_path.write_text(example_path.read_text())
+        print("  Created .env from .env.example")
+    else:
+        env_path.write_text("")
+        print("  Created empty .env")
+
+lines = env_path.read_text().splitlines()
+values = {}
+for line in lines:
+    if "=" in line and not line.lstrip().startswith("#"):
+        k, _, v = line.partition("=")
+        values[k.strip()] = v.strip()
+
+
+def set_key(key, value):
+    global lines
+    replaced = False
+    new_lines = []
+    for line in lines:
+        if "=" in line and not line.lstrip().startswith("#") and line.split("=", 1)[0].strip() == key:
+            new_lines.append(f"{key}={value}")
+            replaced = True
+        else:
+            new_lines.append(line)
+    if not replaced:
+        new_lines.append(f"{key}={value}")
+    lines = new_lines
+
+
+def is_valid_fernet(value):
+    try:
+        return len(base64.urlsafe_b64decode(value.encode())) == 32
+    except Exception:
+        return False
+
+
+secret_key = values.get("SECRET_KEY", "")
+if secret_key in ("", "supersecretkey") or len(secret_key) < 64:
+    set_key("SECRET_KEY", secrets.token_urlsafe(48))
+    print("  Generated a new SECRET_KEY")
+else:
+    print("  SECRET_KEY already set")
+
+credential_key = values.get("CREDENTIAL_ENCRYPTION_KEY", "")
+if not is_valid_fernet(credential_key):
+    # A Fernet key is 32 random bytes, url-safe base64 encoded.
+    set_key("CREDENTIAL_ENCRYPTION_KEY", base64.urlsafe_b64encode(os.urandom(32)).decode())
+    print("  Generated a new CREDENTIAL_ENCRYPTION_KEY")
+else:
+    print("  CREDENTIAL_ENCRYPTION_KEY already set")
+
+env_path.write_text("\n".join(lines) + "\n")
+PY
+
 echo "Starting Docker services..."
 docker compose up -d --build
 
