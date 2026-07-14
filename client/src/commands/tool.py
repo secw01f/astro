@@ -176,6 +176,10 @@ def create(
         click.echo(red("Failed to create toolset", "bold"))
         click.echo(white("Error: --header is required when --auth-type header is set", "normal"))
         return
+    if not url:
+        click.echo(red("Failed to create toolset", "bold"))
+        click.echo(white("Error: --url is required for HTTP and MCP toolsets", "normal"))
+        return
 
     payload = {
         "name": name,

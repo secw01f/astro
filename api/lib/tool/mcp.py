@@ -31,8 +31,9 @@ def MCP(server: str, tools: list[str] | None = None, auth_required: bool = False
 
 def is_valid_server(url: str, auth_required: bool = False, auth_type: AuthType | None = None, token: str | None = None, header: str | None = None) -> bool:
     try:
-        with httpx.Client() as client:
+        with httpx.Client(timeout=20.0) as client:
             client.headers["Accept"] = "application/json, text/event-stream"
+            client.headers["Content-Type"] = "application/json"
             if auth_required:
                 if auth_type == AuthType.BEARER:
                     if not token:
@@ -44,12 +45,18 @@ def is_valid_server(url: str, auth_required: bool = False, auth_type: AuthType |
                         logger.error("MCP validation failed: header auth requires both a header name and token")
                         return False
                     client.headers[header] = token
+            # A reachable MCP server answers the Streamable HTTP `initialize` handshake.
+            # (The old `mcp.describe` probe is not part of the MCP spec and is rejected
+            # by compliant servers such as GitHub's remote MCP endpoint.)
             body = {
                 "jsonrpc": "2.0",
-                "method": "mcp.describe",
+                "id": 1,
+                "method": "initialize",
                 "params": {
-                    "tool": "mcp.describe"
-                }
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": {"name": "astro", "version": "1.0"},
+                },
             }
             response = client.post(url, json=body)
             if 200 <= response.status_code < 300:

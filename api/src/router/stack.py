@@ -1,36 +1,131 @@
 import logging
-import asyncio
 import uuid
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlmodel import select
 from sqlalchemy.orm import noload, selectinload
 from typing import Annotated
-from haystack.dataclasses import ChatMessage, ChatRole
 
-from src.db.db import async_session, session_dep
-from src.db.models import LLM, Agent, Stack, StackPublic, Message, Tool, ToolSet, AgentStackLink, Credential
+from src.db.db import session_dep
+from src.db.models import (
+    Agent,
+    Stack,
+    StackPublic,
+    Message,
+    MessagePublic,
+    Tool,
+    ToolSet,
+    AgentStackLink,
+    StackSchedule,
+    StackScheduleRun,
+    StackScheduleTime,
+)
 from lib.auth.auth import verify_token
 
-from lib.agent import SupervisorAgent, SupportingAgent, StreamingCallback
-from lib.message import event_stream, fanout, storage_consumer, next_position
-from lib.stack.models import CreateStack, ExecuteStack, UpdateStack
+from lib.stack.models import (
+    CreateStack,
+    ExecuteStack,
+    UpdateStack,
+    CreateStackSchedule,
+    UpdateStackSchedule,
+    StackSchedulePublic,
+    StackScheduleRunPublic,
+    StackScheduleTimePublic,
+    StackScheduleType,
+)
+from lib.stack.recurrence import next_recurring_run_at
+from lib.stack.schedule import (
+    create_schedule_times,
+    normalize_run_times,
+    replace_pending_schedule_times,
+)
+from lib.stack.runner import (
+    StackRunError,
+    persist_user_message,
+)
+from lib.stack.streambus import (
+    get_run_meta,
+    publish_file_result,
+    set_run_meta,
+    stream_run_events,
+)
 from lib.agent.enums import AgentType
-from lib.agent.prompts import create_prompt
-from lib.llm import chat_generator
-from lib.credentials import decrypt_token
-from lib.tool.resolver import build_agent_toolset_catalog
-from src.tool.memory import MemoryToolset
-from src.tool.date import DateToolset
-from src.tool.math import MathToolset
-from src.tool.spec import SpecToolset
-from src.tool.message import MessageToolset
-from src.tool.file import FileToolset
-from lib.file import FileRunRegistry, FileRunSession, save_user_file
+from lib.file import save_user_file
+from src.celery.tasks import run_interactive_stack_task
+
+INTERACTIVE_QUEUE = "interactive"
 
 stack_router = APIRouter(prefix="/stack", dependencies=[Depends(verify_token)])
 logger = logging.getLogger(__name__)
+
+_SCHEDULE_LOAD_OPTIONS = (selectinload(StackSchedule.times),)
+
+
+def _schedule_time_to_public(time_slot: StackScheduleTime) -> StackScheduleTimePublic:
+    return StackScheduleTimePublic(
+        id=time_slot.id,
+        run_at=time_slot.run_at,
+        status=time_slot.status,
+    )
+
+
+def _schedule_to_public(schedule: StackSchedule) -> StackSchedulePublic:
+    times = sorted(schedule.times or [], key=lambda slot: slot.run_at)
+    return StackSchedulePublic(
+        id=schedule.id,
+        stack_id=schedule.stack_id,
+        name=schedule.name,
+        message=schedule.message,
+        schedule_type=schedule.schedule_type,
+        interval_seconds=schedule.interval_seconds,
+        run_times=[_schedule_time_to_public(time_slot) for time_slot in times],
+        recurrence=schedule.recurrence,
+        recurrence_day=schedule.recurrence_day,
+        recurrence_hour=schedule.recurrence_hour,
+        recurrence_minute=schedule.recurrence_minute,
+        enabled=schedule.enabled,
+        verbose=schedule.verbose,
+        last_run_at=schedule.last_run_at,
+        next_run_at=schedule.next_run_at,
+        created=schedule.created,
+    )
+
+
+def _schedule_run_to_public(run: StackScheduleRun) -> StackScheduleRunPublic:
+    return StackScheduleRunPublic(
+        id=run.id,
+        schedule_id=run.schedule_id,
+        stack_id=run.stack_id,
+        run_id=run.run_id,
+        schedule_time_id=run.schedule_time_id,
+        status=run.status,
+        result=run.result,
+        error=run.error,
+        started_at=run.started_at,
+        completed_at=run.completed_at,
+        message_start_id=run.message_start_id,
+        message_end_id=run.message_end_id,
+    )
+
+
+async def _get_owned_schedule(
+    session: session_dep,
+    schedule_id: int,
+    user_id: int,
+) -> StackSchedule:
+    statement = (
+        select(StackSchedule)
+        .where(StackSchedule.id == schedule_id, StackSchedule.user_id == user_id)
+        .options(*_SCHEDULE_LOAD_OPTIONS)
+    )
+    result = await session.exec(statement)
+    schedule = result.first()
+    if schedule is None:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    return schedule
+
 
 @stack_router.get("/stacks")
 async def get_all_stacks(request: Request, session: session_dep) -> dict[str, list[StackPublic]]:
@@ -64,6 +159,348 @@ async def get_all_stacks(request: Request, session: session_dep) -> dict[str, li
     stacks = result.all()
 
     return {"stacks": [StackPublic.model_validate(stack) for stack in stacks]}
+
+
+@stack_router.post("/schedule/create")
+async def create_stack_schedule(
+    request: Request,
+    body: CreateStackSchedule,
+    session: session_dep,
+) -> dict[str, StackSchedulePublic]:
+    claims = getattr(request.state, "claims", None)
+    if not claims or "id" not in claims:
+        raise HTTPException(status_code=401, detail="Missing JWT claims on request")
+
+    user_id = claims["id"]
+    stack = await session.get(Stack, body.stack_id)
+    if stack is None or stack.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Stack not found")
+
+    now = datetime.utcnow()
+    try:
+        if body.schedule_type == StackScheduleType.FIXED:
+            run_times = normalize_run_times(body.run_times or [], now=now)
+            next_run_at = run_times[0]
+            interval_seconds = None
+            recurrence = None
+            recurrence_day = None
+            recurrence_hour = 0
+            recurrence_minute = 0
+        elif body.schedule_type == StackScheduleType.RECURRING:
+            run_times = []
+            interval_seconds = None
+            recurrence = body.recurrence
+            recurrence_day = body.recurrence_day
+            recurrence_hour = body.recurrence_hour
+            recurrence_minute = body.recurrence_minute
+            next_run_at = next_recurring_run_at(
+                recurrence,
+                recurrence_day,
+                recurrence_hour,
+                recurrence_minute,
+                after=now,
+            )
+        else:
+            run_times = []
+            interval_seconds = body.interval_seconds
+            recurrence = None
+            recurrence_day = None
+            recurrence_hour = 0
+            recurrence_minute = 0
+            next_run_at = now
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    schedule = StackSchedule(
+        name=body.name,
+        stack_id=body.stack_id,
+        user_id=user_id,
+        message=body.message,
+        schedule_type=body.schedule_type,
+        interval_seconds=interval_seconds,
+        recurrence=recurrence,
+        recurrence_day=recurrence_day,
+        recurrence_hour=recurrence_hour,
+        recurrence_minute=recurrence_minute,
+        enabled=body.enabled,
+        verbose=body.verbose,
+        next_run_at=next_run_at,
+    )
+    session.add(schedule)
+    await session.commit()
+    await session.refresh(schedule)
+
+    if body.schedule_type == StackScheduleType.FIXED:
+        await create_schedule_times(session, schedule.id, run_times)
+        await session.commit()
+
+    schedule = await _get_owned_schedule(session, schedule.id, user_id)
+    return {"schedule": _schedule_to_public(schedule)}
+
+
+@stack_router.get("/schedules")
+async def list_stack_schedules(
+    request: Request,
+    session: session_dep,
+) -> dict[str, list[StackSchedulePublic]]:
+    claims = getattr(request.state, "claims", None)
+    if not claims or "id" not in claims:
+        raise HTTPException(status_code=401, detail="Missing JWT claims on request")
+
+    user_id = claims["id"]
+    statement = (
+        select(StackSchedule)
+        .where(StackSchedule.user_id == user_id)
+        .options(*_SCHEDULE_LOAD_OPTIONS)
+        .order_by(StackSchedule.created.desc())
+    )
+    result = await session.exec(statement)
+    schedules = result.all()
+    return {"schedules": [_schedule_to_public(schedule) for schedule in schedules]}
+
+
+@stack_router.get("/schedule/run/{run_id}")
+async def get_stack_schedule_run(
+    request: Request,
+    run_id: str,
+    session: session_dep,
+) -> dict[str, StackScheduleRunPublic]:
+    claims = getattr(request.state, "claims", None)
+    if not claims or "id" not in claims:
+        raise HTTPException(status_code=401, detail="Missing JWT claims on request")
+
+    user_id = claims["id"]
+    statement = select(StackScheduleRun).where(
+        StackScheduleRun.run_id == run_id,
+        StackScheduleRun.user_id == user_id,
+    )
+    result = await session.exec(statement)
+    run = result.first()
+    if run is None:
+        raise HTTPException(status_code=404, detail="Scheduled run not found")
+
+    return {"run": _schedule_run_to_public(run)}
+
+
+@stack_router.get("/schedule/run/{run_id}/messages")
+async def get_stack_schedule_run_messages(
+    request: Request,
+    run_id: str,
+    session: session_dep,
+) -> dict[str, list[MessagePublic]]:
+    claims = getattr(request.state, "claims", None)
+    if not claims or "id" not in claims:
+        raise HTTPException(status_code=401, detail="Missing JWT claims on request")
+
+    user_id = claims["id"]
+    statement = select(StackScheduleRun).where(
+        StackScheduleRun.run_id == run_id,
+        StackScheduleRun.user_id == user_id,
+    )
+    result = await session.exec(statement)
+    run = result.first()
+    if run is None:
+        raise HTTPException(status_code=404, detail="Scheduled run not found")
+
+    if run.message_start_id is None:
+        return {"messages": []}
+
+    message_statement = (
+        select(Message)
+        .where(
+            Message.stack_id == run.stack_id,
+            Message.id >= run.message_start_id,
+        )
+        .order_by(Message.id)
+    )
+    if run.message_end_id is not None:
+        message_statement = message_statement.where(
+            Message.id <= run.message_end_id
+        )
+
+    message_result = await session.exec(message_statement)
+    messages = message_result.all()
+    return {"messages": [MessagePublic.model_validate(message) for message in messages]}
+
+
+@stack_router.get("/schedule/{schedule_id}")
+async def get_stack_schedule(
+    request: Request,
+    schedule_id: int,
+    session: session_dep,
+) -> dict[str, StackSchedulePublic]:
+    claims = getattr(request.state, "claims", None)
+    if not claims or "id" not in claims:
+        raise HTTPException(status_code=401, detail="Missing JWT claims on request")
+
+    user_id = claims["id"]
+    schedule = await _get_owned_schedule(session, schedule_id, user_id)
+    return {"schedule": _schedule_to_public(schedule)}
+
+
+@stack_router.patch("/schedule/{schedule_id}")
+async def update_stack_schedule(
+    request: Request,
+    schedule_id: int,
+    body: Annotated[UpdateStackSchedule, Body(...)],
+    session: session_dep,
+) -> dict[str, StackSchedulePublic]:
+    claims = getattr(request.state, "claims", None)
+    if not claims or "id" not in claims:
+        raise HTTPException(status_code=401, detail="Missing JWT claims on request")
+
+    user_id = claims["id"]
+    schedule = await _get_owned_schedule(session, schedule_id, user_id)
+
+    updates = body.model_dump(exclude_unset=True)
+    run_times = updates.pop("run_times", None)
+    new_schedule_type = updates.get("schedule_type", schedule.schedule_type)
+    recurrence_fields = {
+        "recurrence",
+        "recurrence_day",
+        "recurrence_hour",
+        "recurrence_minute",
+    }
+    recurrence_changed = bool(recurrence_fields & updates.keys())
+
+    if new_schedule_type == StackScheduleType.INTERVAL:
+        if run_times is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="run_times cannot be set for interval schedules",
+            )
+        if recurrence_changed:
+            raise HTTPException(
+                status_code=400,
+                detail="recurrence fields cannot be set for interval schedules",
+            )
+        if "interval_seconds" in updates:
+            schedule.next_run_at = datetime.utcnow() + timedelta(
+                seconds=updates["interval_seconds"]
+            )
+    elif new_schedule_type == StackScheduleType.FIXED:
+        if "interval_seconds" in updates:
+            raise HTTPException(
+                status_code=400,
+                detail="interval_seconds cannot be set for fixed schedules",
+            )
+        if recurrence_changed:
+            raise HTTPException(
+                status_code=400,
+                detail="recurrence fields cannot be set for fixed schedules",
+            )
+        if run_times is not None:
+            try:
+                schedule.next_run_at = await replace_pending_schedule_times(
+                    session,
+                    schedule,
+                    run_times,
+                    now=datetime.utcnow(),
+                )
+                schedule.enabled = True
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+    elif new_schedule_type == StackScheduleType.RECURRING:
+        if "interval_seconds" in updates:
+            raise HTTPException(
+                status_code=400,
+                detail="interval_seconds cannot be set for recurring schedules",
+            )
+        if run_times is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="run_times cannot be set for recurring schedules",
+            )
+
+    for key, value in updates.items():
+        setattr(schedule, key, value)
+
+    if schedule.schedule_type == StackScheduleType.RECURRING:
+        if schedule.recurrence is None or schedule.recurrence_day is None:
+            raise HTTPException(
+                status_code=400,
+                detail="recurrence and recurrence_day are required for recurring schedules",
+            )
+        if recurrence_changed or "schedule_type" in updates:
+            try:
+                schedule.next_run_at = next_recurring_run_at(
+                    schedule.recurrence,
+                    schedule.recurrence_day,
+                    schedule.recurrence_hour,
+                    schedule.recurrence_minute,
+                    after=datetime.utcnow(),
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    session.add(schedule)
+    await session.commit()
+    schedule = await _get_owned_schedule(session, schedule_id, user_id)
+    return {"schedule": _schedule_to_public(schedule)}
+
+
+@stack_router.delete("/schedule/{schedule_id}")
+async def delete_stack_schedule(
+    request: Request,
+    schedule_id: int,
+    session: session_dep,
+) -> dict[str, str]:
+    claims = getattr(request.state, "claims", None)
+    if not claims or "id" not in claims:
+        raise HTTPException(status_code=401, detail="Missing JWT claims on request")
+
+    user_id = claims["id"]
+    schedule = await session.get(StackSchedule, schedule_id)
+    if schedule is None or schedule.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+
+    statement = select(StackScheduleRun).where(StackScheduleRun.schedule_id == schedule_id)
+    result = await session.exec(statement)
+    for run in result.all():
+        await session.delete(run)
+
+    time_statement = select(StackScheduleTime).where(
+        StackScheduleTime.schedule_id == schedule_id
+    )
+    time_result = await session.exec(time_statement)
+    for time_slot in time_result.all():
+        await session.delete(time_slot)
+
+    await session.delete(schedule)
+    await session.commit()
+    return {"message": "Schedule deleted successfully"}
+
+
+@stack_router.get("/schedule/{schedule_id}/runs")
+async def list_stack_schedule_runs(
+    request: Request,
+    schedule_id: int,
+    session: session_dep,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, list[StackScheduleRunPublic]]:
+    claims = getattr(request.state, "claims", None)
+    if not claims or "id" not in claims:
+        raise HTTPException(status_code=401, detail="Missing JWT claims on request")
+
+    user_id = claims["id"]
+    schedule = await session.get(StackSchedule, schedule_id)
+    if schedule is None or schedule.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+
+    safe_limit = max(1, min(limit, 100))
+    safe_offset = max(0, offset)
+    statement = (
+        select(StackScheduleRun)
+        .where(StackScheduleRun.schedule_id == schedule_id)
+        .order_by(StackScheduleRun.started_at.desc())
+        .offset(safe_offset)
+        .limit(safe_limit)
+    )
+    result = await session.exec(statement)
+    runs = result.all()
+    return {"runs": [_schedule_run_to_public(run) for run in runs]}
+
 
 @stack_router.get("/{id}")
 async def get_stack_by_id(request: Request, id: int, session: session_dep) -> dict[str, StackPublic]:
@@ -229,217 +666,20 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
 
     user_id = claims["id"]
 
-    _stack_statement = (
-        select(Stack)
-        .options(
-            selectinload(Stack.agents)
-            .selectinload(Agent.toolsets)
-            .selectinload(ToolSet.tools),
-            selectinload(Stack.agents)
-            .selectinload(Agent.toolsets)
-            .selectinload(ToolSet.member_tools)
-            .selectinload(Tool.toolset),
-            selectinload(Stack.agents)
-            .selectinload(Agent.tools)
-            .selectinload(Tool.toolset),
-        )
-        .where(Stack.id == id, Stack.user_id == user_id)
-    )
-    _stack_result = await session.exec(_stack_statement)
-    _stack = _stack_result.first()
+    try:
+        user_message_id = await persist_user_message(session, id, user_id, execute.message)
+    except StackRunError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
-    if not _stack:
-        raise HTTPException(status_code=404, detail="Stack not found")
-
-    foreign_agents = [a.id for a in _stack.agents if a.user_id != user_id]
-    if foreign_agents:
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "message": "Stack contains agents not owned by you",
-                "agent_ids": foreign_agents,
-            },
-        )
-
-    _supervisors = [agent for agent in _stack.agents if agent.agent_type == AgentType.SUPERVISOR]
-    if len(_supervisors) == 0:
-        raise HTTPException(status_code=400, detail="Stack has no supervisor agent")
-    _stack_supervisor = _supervisors[0]
-
-    if _stack_supervisor.llm_id is None:
-        raise HTTPException(status_code=400, detail="Supervisor agent is missing an LLM")
-    _supervisor_llm = await session.get(LLM, _stack_supervisor.llm_id)
-    if _supervisor_llm is None:
-        raise HTTPException(status_code=404, detail="Supervisor LLM not found")
-    if _supervisor_llm.user_id != user_id:
-        raise HTTPException(status_code=403, detail="Supervisor LLM is not owned by you")
-
-    _credential = await session.get(Credential, _supervisor_llm.credential_id)
-    if _credential is None:
-        raise HTTPException(status_code=404, detail="Credential not found")
-    if _credential.user_id != user_id:
-        raise HTTPException(status_code=403, detail="Supervisor LLM credential is not owned by you")
-    _token = decrypt_token(_credential.token)
-
-    supervisor_llm = chat_generator(_supervisor_llm.provider, _supervisor_llm.model, _token, _supervisor_llm.key_id, _supervisor_llm.region, _supervisor_llm.max_tokens)
-    
     run_id = str(uuid.uuid4())
-
-    main_queue = asyncio.Queue()
-    client_queue = asyncio.Queue()
-    storage_queue = asyncio.Queue()
-
-    _app_loop = asyncio.get_running_loop()
-
-    file_session = FileRunSession(
-        run_id=run_id,
-        stack_id=id,
-        user_id=user_id,
-        queue=main_queue,
-        loop=_app_loop,
-        agent_name=_stack_supervisor.name,
+    await set_run_meta(run_id, id, user_id)
+    run_interactive_stack_task.apply_async(
+        args=[id, user_id, execute.message, run_id, user_message_id, execute.verbose],
+        queue=INTERACTIVE_QUEUE,
     )
-    FileRunRegistry.register(file_session)
-    _callback = StreamingCallback(
-        _stack_supervisor.name,
-        main_queue,
-        run_id,
-        loop=_app_loop,
-    )
-
-    supervisor = SupervisorAgent(
-        chat_generator=supervisor_llm,
-        system_prompt=create_prompt(_stack_supervisor.system_prompt, AgentType.SUPERVISOR),
-        streaming_callback=_callback
-    )
-
-    supervisor.add_tool(MemoryToolset(user_id, app_loop=_app_loop))
-    supervisor.add_tool(DateToolset())
-    supervisor.add_tool(MathToolset())
-    supervisor.add_tool(SpecToolset())
-    supervisor.add_tool(MessageToolset(id, user_id, app_loop=_app_loop))
-    supervisor.add_tool(
-        FileToolset(user_id, file_session=file_session, app_loop=_app_loop)
-    )
-
-    _stack_agents = [agent for agent in _stack.agents if agent.agent_type == AgentType.SUPPORTING]
-
-    for agent in _stack_agents:
-        if agent.llm_id is None:
-            raise HTTPException(status_code=400, detail=f"Supporting agent {agent.id} is missing an LLM")
-        _llm = await session.get(LLM, agent.llm_id)
-        if _llm is None:
-            raise HTTPException(status_code=404, detail=f"LLM {agent.llm_id} for supporting agent {agent.id} not found")
-        if _llm.user_id != user_id:
-            raise HTTPException(
-                status_code=403,
-                detail=f"LLM {_llm.id} for supporting agent {agent.id} is not owned by you",
-            )
-
-        _credential = await session.get(Credential, _llm.credential_id)
-        if _credential is None:
-            raise HTTPException(status_code=404, detail=f"Credential {_llm.credential_id} for LLM {agent.llm_id} not found")
-        if _credential.user_id != user_id:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Credential for LLM {agent.llm_id} is not owned by you",
-            )
-        _token = decrypt_token(_credential.token)
-
-        _agent_llm = chat_generator(_llm.provider, _llm.model, _token, _llm.key_id, _llm.region, _llm.max_tokens)
-
-        _agent_tools = [
-            MemoryToolset(user_id, app_loop=_app_loop),
-            DateToolset(),
-            MathToolset(),
-            SpecToolset(),
-            FileToolset(user_id, file_session=file_session, app_loop=_app_loop),
-        ]
-
-        _agent_tools.extend(
-            await build_agent_toolset_catalog(session, agent, user_id)
-        )
-
-        _support_stream = StreamingCallback(
-            agent.name,
-            main_queue,
-            run_id,
-            loop=_app_loop,
-        )
-        _agent = SupportingAgent(
-            chat_generator=_agent_llm,
-            name=agent.name,
-            description=agent.description,
-            system_prompt=create_prompt(agent.system_prompt, AgentType.SUPPORTING),
-            user_prompt="""{% message role="user" %}{{prompt}}{% endmessage %}""",
-            required_variables=["prompt"],
-            tools=_agent_tools,
-            streaming_callback=_support_stream,
-        )
-
-        supervisor.register_supporting_agent(_agent)
-
-    supervisor.warm_up()
-
-    _position = await next_position(session, id, user_id)
-
-    user_message = Message(
-        role="user",
-        content=execute.message,
-        position=_position,
-        stack_id=id
-    )
-
-    session.add(user_message)
-    await session.commit()
-
-    assistant_position_state = {"next": _position + 1}
-
-    async def storage_worker():
-        async with async_session() as storage_session:
-            await storage_consumer(storage_queue, storage_session, id, assistant_position_state)
-
-    async def fanout_worker():
-        await fanout(
-            main_queue,
-            client_queue,
-            storage_queue,
-            verbose=execute.verbose,
-            supervisor_agent_name=_stack_supervisor.name,
-        )
-
-    async def runner():
-        fanout_task = asyncio.create_task(fanout_worker())
-        storage_task = asyncio.create_task(storage_worker())
-        try:
-            messages_for_run = [ChatMessage.from_user(execute.message)]
-            result = await asyncio.to_thread(supervisor.run, messages=messages_for_run)
-
-            await asyncio.sleep(0)
-
-            final_text = None
-            for msg in reversed((result or {}).get("messages") or []):
-                if msg.is_from(ChatRole.ASSISTANT) and msg.text:
-                    final_text = msg.text
-                    break
-            _callback.emit_final_assistant_text(final_text)
-        except Exception as e:
-            logger.exception("Stack run failed", exc_info=e)
-            _callback.emit_final_assistant_text(
-                f"Stack execution failed: {str(e)}"
-            )
-        finally:
-            FileRunRegistry.unregister(run_id)
-            _callback.end()
-            await asyncio.sleep(0)
-            await main_queue.put(None)
-            await fanout_task
-            await storage_task
-
-    asyncio.create_task(runner())
 
     return StreamingResponse(
-        event_stream(client_queue),
+        stream_run_events(run_id, request.is_disconnected),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -461,10 +701,10 @@ async def submit_run_file(
         raise HTTPException(status_code=401, detail="Missing JWT claims on request")
 
     user_id = claims["id"]
-    file_session = FileRunRegistry.get(run_id)
-    if file_session is None:
+    meta = await get_run_meta(run_id)
+    if meta is None:
         raise HTTPException(status_code=404, detail="Stack run not found or already finished")
-    if file_session.stack_id != id or file_session.user_id != user_id:
+    if meta["stack_id"] != id or meta["user_id"] != user_id:
         raise HTTPException(status_code=404, detail="Stack run not found")
 
     content = await file.read()
@@ -477,7 +717,8 @@ async def submit_run_file(
         content,
         content_type=file.content_type,
     )
-    resolved = file_session.resolve(
+    await publish_file_result(
+        run_id,
         request_id,
         {
             "file_id": row["id"],
@@ -486,18 +727,12 @@ async def submit_run_file(
             "size": row["size"],
         },
     )
-    if not resolved:
-        raise HTTPException(
-            status_code=404,
-            detail="File request not found or already fulfilled",
-        )
 
     return {
         "request_id": request_id,
         "file_id": row["id"],
         "filename": row["filename"],
     }
-
 
 @stack_router.delete("/{id}")
 async def delete_stack(request: Request, id: int, session: session_dep) -> dict[str, str]:
@@ -520,6 +755,23 @@ async def delete_stack(request: Request, id: int, session: session_dep) -> dict[
     messages = result.all()
     for message in messages:
         await session.delete(message)
+
+    statement = select(StackScheduleRun).where(StackScheduleRun.stack_id == id)
+    result = await session.exec(statement)
+    for schedule_run in result.all():
+        await session.delete(schedule_run)
+
+    statement = select(StackSchedule).where(StackSchedule.stack_id == id)
+    result = await session.exec(statement)
+    schedules = result.all()
+    for schedule in schedules:
+        time_statement = select(StackScheduleTime).where(
+            StackScheduleTime.schedule_id == schedule.id
+        )
+        time_result = await session.exec(time_statement)
+        for time_slot in time_result.all():
+            await session.delete(time_slot)
+        await session.delete(schedule)
 
     statement = select(AgentStackLink).where(AgentStackLink.stack_id == id)
     result = await session.exec(statement)

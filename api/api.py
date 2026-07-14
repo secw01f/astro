@@ -8,9 +8,10 @@ import redis.asyncio as redis
 
 from src.logging.config import log_config
 from settings import settings
+from src.celery import celery
 from lib.auth.auth import create_user, generate_password
 from lib.auth.enums import Role
-from src.db.db import init_db, async_session
+from src.db.db import async_session
 from src.db.models import User, ToolSet, Tool, Prompt
 from lib.agent.prompts import APPLICATION_SECURITY_SUPERVISOR_PROMPT, GOVERNANCE_RISK_COMPLIANCE_SUPERVISOR_PROMPT, DETECTION_INCIDENT_RESPONSE_SUPERVISOR_PROMPT, OFFENSIVE_SECURITY_SUPERVISOR_PROMPT, VULNERABILITY_MANAGEMENT_SUPERVISOR_PROMPT, APPLICATION_SECURITY_ARCHITECT_PROMPT, DETECTION_INCIDENT_RESPONSE_ARCHITECT_PROMPT, SECURITY_ENGINEERING_ARCHITECT_PROMPT, APPLICATION_SECURITY_ENGINEER_PROMPT, GOVERNANCE_RISK_COMPLIANCE_ENGINEER_PROMPT, DETECTION_INCIDENT_RESPONSE_ENGINEER_PROMPT, OFFENSIVE_SECURITY_ENGINEER_PROMPT, VULNERABILITY_MANAGEMENT_ENGINEER_PROMPT, APPLICATION_SECURITY_ANALYST_PROMPT, GOVERNANCE_RISK_COMPLIANCE_ANALYST_PROMPT, DETECTION_INCIDENT_RESPONSE_ANALYST_PROMPT, OFFENSIVE_SECURITY_ANALYST_PROMPT, VULNERABILITY_MANAGEMENT_ANALYST_PROMPT
 from lib.agent.enums import AgentRole, AgentType
@@ -36,10 +37,6 @@ async def startup_event():
     if settings.SECRET_KEY == "supersecretkey" or settings.SECRET_KEY == "" or settings.SECRET_KEY is None or len(settings.SECRET_KEY) < 64:
         logger.error("SECRET_KEY is not set or insecure")
         raise SystemExit("SECRET_KEY is not set or insecure")
-
-    logger.info("Initializing the database")
-    await init_db()
-    logger.info("Database initialized")
 
     async with async_session() as session:
         user = select(User).where(User.username == "stack")
@@ -472,6 +469,10 @@ async def startup_event():
         )
 
     logger.info("Startup Complete")
+
+@api.get("/health")
+async def health():
+    return {"status": "ok"}
 
 api.include_router(auth_router)
 api.include_router(agent_router)

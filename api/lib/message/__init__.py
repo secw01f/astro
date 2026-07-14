@@ -1,7 +1,7 @@
 import asyncio
 import json
 
-from sqlmodel import select
+from sqlmodel import select, func
 from fastapi import HTTPException
 
 from src.db.models import Message, Stack
@@ -19,9 +19,20 @@ async def storage_consumer(
     queue: asyncio.Queue,
     session,
     stack_id: int,
-    position_state: dict[str, int],
 ):
     messages = {}
+
+    async def _persist_message(role: str, content: str) -> None:
+        position = await reserve_position(session, stack_id)
+        session.add(
+            Message(
+                role=role,
+                content=content,
+                stack_id=stack_id,
+                position=position,
+            )
+        )
+        await session.commit()
 
     while True:
         item = await queue.get()
@@ -38,8 +49,6 @@ async def storage_consumer(
         elif item["type"] == "response":
             messages[key] = item.get("content") or ""
         elif item["type"] == "tool_result":
-            pos = position_state["next"]
-            position_state["next"] = pos + 1
             payload = {
                 "kind": "tool_result",
                 "agent": item.get("agent"),
@@ -52,31 +61,10 @@ async def storage_consumer(
                 "finish_reason": item.get("finish_reason"),
                 "timestamp": item.get("timestamp"),
             }
-            session.add(
-                Message(
-                    role="tool",
-                    content=json.dumps(payload, default=str),
-                    stack_id=stack_id,
-                    position=pos,
-                )
-            )
-            await session.commit()
+            await _persist_message("tool", json.dumps(payload, default=str))
         elif item["type"] == "end":
             full_message = messages.get(key, "")
-
-            pos = position_state["next"]
-            position_state["next"] = pos + 1
-
-            session.add(
-                Message(
-                    role="assistant",
-                    content=full_message,
-                    stack_id=stack_id,
-                    position=pos,
-                )
-            )
-
-            await session.commit()
+            await _persist_message("assistant", full_message)
             messages.pop(key, None)
 
 async def fanout(
@@ -100,8 +88,13 @@ async def fanout(
         to_client = typ not in storage_only_types
         if typ == "file_request":
             to_client = True
-        if typ in ("tool_call", "tool_result"):
+        if typ == "tool_call":
             to_client = False
+        elif typ == "tool_result":
+            # Surface tool results only in verbose mode; the client uses a
+            # supporting agent's own tool_result (tool_name == agent name) as a
+            # deterministic signal that its buffered reply is complete.
+            to_client = verbose
         if to_client and not verbose and supervisor_agent_name is not None:
             agent_name = item.get("agent") if isinstance(item, dict) else None
             if agent_name != supervisor_agent_name:
@@ -110,20 +103,35 @@ async def fanout(
             await client_queue.put(item)
         await storage_queue.put(item)
 
-async def next_position(session, stack_id: int, user_id: str) -> int:
-    stmt = (
-        select(Stack)
-        .where(Stack.id == stack_id, Stack.user_id == user_id)
-        .with_for_update()
-    )
+async def reserve_position(session, stack_id: int) -> int:
+    """Atomically reserve the next message position for a stack.
 
-    result = await session.exec(stmt)
-    stack = result.first()
+    Locks the stack row (``FOR UPDATE``) so concurrent runs on the same stack
+    are serialized, and reconciles ``last_position`` against the current
+    ``MAX(position)`` so the returned value is always beyond every existing
+    message. The caller is responsible for committing.
+    """
+    stmt = select(Stack).where(Stack.id == stack_id).with_for_update()
+    stack = (await session.exec(stmt)).first()
 
     if not stack:
         raise HTTPException(status_code=404, detail="Stack not found")
+
+    max_stmt = select(func.max(Message.position)).where(Message.stack_id == stack_id)
+    max_position = (await session.exec(max_stmt)).one()
+    if max_position is not None and max_position > stack.last_position:
+        stack.last_position = max_position
 
     stack.last_position += 1
     session.add(stack)
 
     return stack.last_position
+
+
+async def next_position(session, stack_id: int, user_id: str) -> int:
+    """Reserve a position after verifying the stack belongs to ``user_id``."""
+    owner_stmt = select(Stack.id).where(Stack.id == stack_id, Stack.user_id == user_id)
+    if (await session.exec(owner_stmt)).first() is None:
+        raise HTTPException(status_code=404, detail="Stack not found")
+
+    return await reserve_position(session, stack_id)
