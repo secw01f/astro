@@ -225,8 +225,41 @@ docker compose exec api alembic revision --autogenerate -m "describe change"
 # 3. Review the generated file in api/migrations/versions/, then commit it
 ```
 
-Adopting Alembic on a pre-existing database (one created before migrations existed)?
-Baseline it once with `docker compose exec api alembic stamp head`.
+---
+
+### Upgrading an existing deployment
+
+Instances deployed before this release built their schema directly from the SQLModel
+metadata (no `alembic_version` table) and encrypted credentials with a key derived from
+`SECRET_KEY`. Two things need attention when upgrading; do both **before** exposing the
+new version to traffic, and back up the database first.
+
+**1. Schema.** The baseline migration is a full-schema snapshot with existence guards, so
+you do **not** need to `alembic stamp` anything. When the `api` container starts it runs
+`alembic upgrade head`, which creates only the objects your database is missing (the new
+`stack_schedule*` tables and the `message` uniqueness constraint) and leaves existing
+tables untouched.
+
+> If the `message` table already contains duplicate `(stack_id, position)` rows, the
+> `uq_message_stack_position` constraint can't be created and the migration will fail.
+> De-duplicate those rows first, then restart the `api` container.
+
+**2. Credentials.** Stored credentials were previously encrypted with a key derived from
+`SECRET_KEY`; they must be re-encrypted with the new `CREDENTIAL_ENCRYPTION_KEY` or they
+will fail to decrypt. Derive the legacy key from your existing `SECRET_KEY`, then run the
+re-encryption script (idempotent, safe to re-run):
+
+```bash
+# Derive the old key from the SECRET_KEY the credentials were encrypted with
+# (run in the container so it reads the same SECRET_KEY from .env):
+OLD_KEY=$(docker compose exec -T api python -c 'import base64, os; s = os.environ["SECRET_KEY"].encode(); print(base64.urlsafe_b64encode(s[:32].ljust(32, b"0")).decode())')
+
+# Re-encrypt every credential to CREDENTIAL_ENCRYPTION_KEY (the new-key default):
+docker compose exec api python -m src.scripts.reencrypt_credentials --old-key "$OLD_KEY"
+```
+
+Set `CREDENTIAL_ENCRYPTION_KEY` in `.env` to a stable value before upgrading (`deploy.sh`
+generates one if it's empty — pin it so it doesn't change on the next deploy).
 
 ---
 
