@@ -1,14 +1,3 @@
-"""Symmetric encryption for stored third-party credentials.
-
-Credential encryption is intentionally decoupled from ``SECRET_KEY`` (which
-signs JWTs) so that rotating the JWT key never invalidates stored credentials.
-``CREDENTIAL_ENCRYPTION_KEY`` must be a valid Fernet key; generate one with::
-
-    python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-
-To rotate the credential key, run ``python -m src.scripts.reencrypt_credentials``.
-"""
-
 from functools import lru_cache
 
 from cryptography.fernet import Fernet
