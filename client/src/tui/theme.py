@@ -15,7 +15,6 @@ BG = "#000000"
 TEXT = "#d4d4d4"
 TEXT_DIM = "#a3a3a3"
 TEXT_MUTED = "#737373"
-TEXT_FAINT = "#525252"
 BORDER = "#333333"
 BORDER_SUBTLE = "#1a1a1a"
 PANEL_BG = "#0a0a0a"
@@ -118,11 +117,13 @@ Screen {{
 
 #prompt_container {{
     height: 3;
+    min-height: 3;
     background: transparent;
     border: round {BORDER};
     margin: 0;
     padding: 0;
     layout: horizontal;
+    align-vertical: top;
 }}
 
 #prompt_container:focus-within {{
@@ -154,6 +155,19 @@ Screen {{
 
 #prompt:focus {{
     border: none;
+}}
+
+#prompt .text-area--cursor-line {{
+    background: transparent;
+}}
+
+#prompt:focus .text-area--cursor-line {{
+    background: transparent;
+}}
+
+#prompt > .text-area--cursor {{
+    color: {PRIMARY};
+    background: {PRIMARY};
 }}
 
 .chat-content {{

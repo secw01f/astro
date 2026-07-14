@@ -3,14 +3,13 @@ import os
 
 import httpx
 from rich.text import Text
-from textual import work
+from textual import events, on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Label, Static
+from textual.widgets import Button, Input, Label, Static, TextArea
 
-from lib.stack import _needs_sentence_space
 from src.tui.theme import (
     ACCENT,
     AGENT_COLORS,
@@ -48,6 +47,59 @@ def _format_assistant_header(name: str, *, style: str) -> Text:
     text.append(name, style=style)
     text.append("\n")
     return text
+
+
+def _needs_sentence_space(last_char: str | None, chunk: str) -> bool:
+    if not last_char or not chunk:
+        return False
+    if chunk[0].isspace() or chunk[0] in ".,!?;:)]}\"'":
+        return False
+    return last_char in ".!?"
+
+
+class MessageTextArea(TextArea):
+    """Multiline prompt: Enter sends, Shift+Enter inserts a newline."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._app: StackExecApp | None = None
+
+    def set_app(self, app: "StackExecApp") -> None:
+        self._app = app
+
+    def on_mount(self) -> None:
+        self.show_vertical_scrollbar = False
+        self.show_horizontal_scrollbar = False
+        self._update_height()
+
+    def _on_key(self, event: events.Key) -> None:
+        if event.key == "shift+enter":
+            self.insert("\n")
+            event.prevent_default()
+            return
+
+        if event.key == "enter" and self._app is not None:
+            message = str(self.text).strip()
+            if message:
+                self.text = ""
+                self._app.submit_message(message)
+                event.prevent_default()
+                return
+
+        super()._on_key(event)
+
+    @on(TextArea.Changed)
+    def _update_height(self, _event: TextArea.Changed | None = None) -> None:
+        if not self.parent:
+            return
+
+        line_count = self.document.line_count
+        target_lines = min(max(1, line_count), 8)
+        new_height = target_lines + 2
+
+        if self.parent.styles.height != new_height:
+            self.parent.styles.height = new_height
+            self.scroll_cursor_visible()
 
 
 class FileRequestScreen(ModalScreen[str | None]):
@@ -124,7 +176,6 @@ class StackExecApp(App):
         self._client: httpx.AsyncClient | None = None
         self._run_id: str | None = None
         self._agent_styles: dict[str, str] = {}
-        self._streaming = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="main_container"):
@@ -136,9 +187,10 @@ class StackExecApp(App):
                         yield Static(id="keymap_indicator")
                     with Horizontal(id="prompt_container"):
                         yield Static("> ", id="prompt_prefix")
-                        yield Input(
-                            placeholder="Message the stack…",
+                        yield MessageTextArea(
+                            "",
                             id="prompt",
+                            show_line_numbers=False,
                         )
                 with Vertical(id="sidebar"):
                     yield Static("Info", id="sidebar-title")
@@ -153,7 +205,9 @@ class StackExecApp(App):
         self._update_status("Ready")
         self.query_one("#keymap_indicator", Static).update(self._keymap_text())
         self._show_empty_state()
-        self.query_one("#prompt", Input).focus()
+        prompt = self.query_one("#prompt", MessageTextArea)
+        prompt.set_app(self)
+        prompt.focus()
 
         if self._verbose:
             self._system(
@@ -169,7 +223,7 @@ class StackExecApp(App):
         return self.query_one("#chat_history", VerticalScroll)
 
     def _keymap_text(self) -> str:
-        return "F1 help · ctrl+c quit · /help commands"
+        return "enter send · shift+enter newline · F1 help · ctrl+c quit"
 
     def _update_status(self, message: str) -> None:
         self.query_one("#status_text", Static).update(message)
@@ -254,15 +308,15 @@ class StackExecApp(App):
     def action_show_help(self) -> None:
         self.run_worker(self._handle_command("/help"))
 
-    async def on_input_submitted(self, event: Input.Submitted) -> None:
-        raw = event.value.strip()
-        prompt = self.query_one("#prompt", Input)
-        prompt.value = ""
+    def submit_message(self, raw: str) -> None:
+        self.run_worker(self._handle_submitted_message(raw))
+
+    async def _handle_submitted_message(self, raw: str) -> None:
         if not raw:
             return
 
-        cmd = raw.lower()
-        if cmd in _CHAT_COMMANDS:
+        cmd = raw.strip().lower()
+        if "\n" not in raw and cmd in _CHAT_COMMANDS:
             await self._handle_command(cmd)
             return
 
@@ -339,14 +393,12 @@ class StackExecApp(App):
 
     @work(exclusive=True)
     async def stream_message(self, message: str) -> None:
-        prompt = self.query_one("#prompt", Input)
+        prompt = self.query_one("#prompt", MessageTextArea)
         prompt.disabled = True
-        self._streaming = True
         self._update_status("Running")
         try:
             await self._stream(message)
         finally:
-            self._streaming = False
             self._update_status("Ready")
             prompt.disabled = False
             prompt.focus()

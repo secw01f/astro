@@ -1,6 +1,5 @@
 import click
 import httpx
-import asyncio
 import os
 
 from lib.color import red, white
@@ -42,25 +41,9 @@ def astro(ctx: click.Context):
     ctx.ensure_object(dict)
     ctx.obj["url"] = url
     ctx.obj["client"] = httpx.Client(base_url=url)
-    ctx.obj["async_client"] = httpx.AsyncClient(base_url=url)
 
     if token is not None:
         ctx.obj["client"].headers.update({"X-API-KEY": token})
-        ctx.obj["async_client"].headers.update({"X-API-KEY": token})
-
-@astro.result_callback()
-@click.pass_context
-def close_client(ctx: click.Context, *_args, **_kwargs):
-    async_client = ctx.obj.get("async_client")
-    if async_client is not None:
-        try:
-            loop = asyncio.new_event_loop()
-            try:
-                loop.run_until_complete(async_client.aclose())
-            finally:
-                loop.close()
-        except RuntimeError:
-            pass
 
 astro.add_command(init)
 astro.add_command(config)
