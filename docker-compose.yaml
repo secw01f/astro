@@ -25,6 +25,7 @@ services:
     volumes:
       - specs:/api/specs
       - logs:/var/log/astro
+      - files:/var/lib/astro/files
 
   tools:
     build:
@@ -72,7 +73,26 @@ services:
         condition: service_started
       api:
         condition: service_healthy
-    command: ["python", "-m", "celery", "--app", "src.celery:celery", "worker", "--loglevel=info"]
+    command: ["python", "-m", "celery", "--app", "src.celery:celery", "worker", "-Q", "celery", "--loglevel=info"]
+    volumes:
+      - files:/var/lib/astro/files
+
+  celery-interactive:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      api:
+        condition: service_healthy
+    command: ["python", "-m", "celery", "--app", "src.celery:celery", "worker", "-Q", "interactive", "--concurrency=8", "--loglevel=info"]
+    volumes:
+      - files:/var/lib/astro/files
 
   celery-beat:
     build:
@@ -93,3 +113,4 @@ volumes:
   dbdata:
   specs:
   logs:
+  files:

@@ -113,6 +113,7 @@ def _cache_key(provider: str, model: str, payload: dict[str, Any]) -> str:
 class RedisTokenBucketLimiter:
     def __init__(self) -> None:
         self._redis: Redis | None = None
+        self._redis_loop: asyncio.AbstractEventLoop | None = None
         self._script_sha: str | None = None
         # threading.Lock: module singleton is used across asyncio.run() / threads;
         # asyncio.Lock is bound to one event loop and breaks under asyncio.to_thread.
@@ -124,11 +125,14 @@ class RedisTokenBucketLimiter:
         if not settings.REDIS_URL:
             logger.warning("LLM limiter enabled but REDIS_URL is not set; limiter is bypassed")
             return None
-        if self._redis is not None:
-            return self._redis
+        # redis.asyncio clients are bound to the loop they were created on. Workers
+        # run each LLM call under a fresh asyncio.run() loop, so a cached client would
+        # dangle on a closed loop and hang. Recreate whenever the loop changes.
+        loop = asyncio.get_running_loop()
         with self._lock:
-            if self._redis is None:
+            if self._redis is None or self._redis_loop is not loop:
                 self._redis = Redis.from_url(settings.REDIS_URL, decode_responses=True)
+                self._redis_loop = loop
             return self._redis
 
     async def _eval_bucket(self, key: str, requested_tokens: int) -> tuple[bool, int]:
@@ -182,6 +186,7 @@ class RedisTokenBucketLimiter:
 class RedisPromptCache:
     def __init__(self) -> None:
         self._redis: Redis | None = None
+        self._redis_loop: asyncio.AbstractEventLoop | None = None
         self._lock = threading.Lock()
 
     async def _get_redis(self) -> Redis | None:
@@ -190,11 +195,12 @@ class RedisPromptCache:
         if not settings.REDIS_URL:
             logger.warning("LLM prompt cache enabled but REDIS_URL is not set; cache is bypassed")
             return None
-        if self._redis is not None:
-            return self._redis
+        # Recreate when the running loop changes (see RedisTokenBucketLimiter._get_redis).
+        loop = asyncio.get_running_loop()
         with self._lock:
-            if self._redis is None:
+            if self._redis is None or self._redis_loop is not loop:
                 self._redis = Redis.from_url(settings.REDIS_URL, decode_responses=False)
+                self._redis_loop = loop
             return self._redis
 
     async def get(self, provider: str, model: str, payload: dict[str, Any]) -> Any | None:

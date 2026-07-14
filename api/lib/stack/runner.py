@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import uuid
 from dataclasses import dataclass
@@ -472,6 +473,76 @@ async def run_stack_background(
     )
     outcome.user_message_id = user_message_id
     return outcome
+
+
+async def execute_interactive_stack(
+    stack_id: int,
+    user_id: int,
+    message: str,
+    run_id: str,
+    user_message_id: int,
+    verbose: bool = False,
+) -> StackRunOutcome:
+    """Run an interactive stack inside a worker, streaming over Redis.
+
+    The user message is already persisted by the API before this is enqueued;
+    ``user_message_id`` lets ``execute_stack_run`` finalize the transcript.
+    Run events are published to a Redis stream (via ``RedisEventPublisher``) and
+    file-upload results arrive over a Redis control channel that ``consume_control``
+    applies to the run's file session.
+    """
+    from lib.stack.streambus import RedisEventPublisher, consume_control
+
+    publisher = RedisEventPublisher(run_id)
+    control_task: asyncio.Task | None = None
+    try:
+        async with async_session() as session:
+            prepared = await prepare_stack_run(
+                session,
+                stack_id,
+                user_id,
+                run_id=run_id,
+            )
+        control_task = asyncio.create_task(
+            consume_control(run_id, prepared.file_session)
+        )
+        return await execute_stack_run(
+            prepared,
+            stack_id,
+            message,
+            verbose=verbose,
+            client_queue=publisher,
+            user_message_id=user_message_id,
+            user_id=user_id,
+        )
+    except StackRunError as exc:
+        detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+        await publisher.emit_error(detail)
+        return StackRunOutcome(
+            run_id=run_id,
+            final_text=None,
+            error=detail,
+            user_message_id=user_message_id,
+            last_message_id=user_message_id,
+        )
+    except Exception as exc:
+        logger.exception("Interactive stack run failed", exc_info=exc)
+        detail = str(exc) or type(exc).__name__
+        await publisher.emit_error(detail)
+        return StackRunOutcome(
+            run_id=run_id,
+            final_text=None,
+            error=detail,
+            user_message_id=user_message_id,
+            last_message_id=user_message_id,
+        )
+    finally:
+        if control_task is not None:
+            control_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await control_task
+        await publisher.put(None)
+        await publisher.aclose()
 
 
 async def process_due_stack_schedules() -> list[tuple[int, int | None]]:

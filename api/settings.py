@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     TOOL_OUTPUT_MAX_CHARS: int = 2000
     FILES_DIR: str = "/var/lib/astro/files"
     FILE_REQUEST_TIMEOUT_SECONDS: int = 3600
+    RUN_STREAM_TTL_SECONDS: int = 3600
+    RUN_STREAM_STARTUP_TIMEOUT_SECONDS: int = 120
 
     model_config = {
         "env_file": ".env",

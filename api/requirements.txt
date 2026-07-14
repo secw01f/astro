@@ -13,6 +13,6 @@ pwdlib[argon2]
 asyncpg
 pgvector[all]
 httpx
-redis
+redis>=5
 celery
 alembic

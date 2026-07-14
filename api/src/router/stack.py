@@ -1,5 +1,5 @@
 import logging
-import asyncio
+import uuid
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, UploadFile
@@ -24,7 +24,6 @@ from src.db.models import (
 )
 from lib.auth.auth import verify_token
 
-from lib.message import event_stream
 from lib.stack.models import (
     CreateStack,
     ExecuteStack,
@@ -44,12 +43,19 @@ from lib.stack.schedule import (
 )
 from lib.stack.runner import (
     StackRunError,
-    execute_stack_run,
     persist_user_message,
-    prepare_stack_run,
+)
+from lib.stack.streambus import (
+    get_run_meta,
+    publish_file_result,
+    set_run_meta,
+    stream_run_events,
 )
 from lib.agent.enums import AgentType
-from lib.file import FileRunRegistry, save_user_file
+from lib.file import save_user_file
+from src.celery.tasks import run_interactive_stack_task
+
+INTERACTIVE_QUEUE = "interactive"
 
 stack_router = APIRouter(prefix="/stack", dependencies=[Depends(verify_token)])
 logger = logging.getLogger(__name__)
@@ -661,28 +667,19 @@ async def run_stack(request: Request, id: int, execute: ExecuteStack, session: s
     user_id = claims["id"]
 
     try:
-        prepared = await prepare_stack_run(session, id, user_id)
         user_message_id = await persist_user_message(session, id, user_id, execute.message)
     except StackRunError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
-    client_queue = asyncio.Queue()
-
-    async def runner():
-        await execute_stack_run(
-            prepared,
-            id,
-            execute.message,
-            verbose=execute.verbose,
-            client_queue=client_queue,
-            user_message_id=user_message_id,
-            user_id=user_id,
-        )
-
-    asyncio.create_task(runner())
+    run_id = str(uuid.uuid4())
+    await set_run_meta(run_id, id, user_id)
+    run_interactive_stack_task.apply_async(
+        args=[id, user_id, execute.message, run_id, user_message_id, execute.verbose],
+        queue=INTERACTIVE_QUEUE,
+    )
 
     return StreamingResponse(
-        event_stream(client_queue),
+        stream_run_events(run_id, request.is_disconnected),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -704,10 +701,10 @@ async def submit_run_file(
         raise HTTPException(status_code=401, detail="Missing JWT claims on request")
 
     user_id = claims["id"]
-    file_session = FileRunRegistry.get(run_id)
-    if file_session is None:
+    meta = await get_run_meta(run_id)
+    if meta is None:
         raise HTTPException(status_code=404, detail="Stack run not found or already finished")
-    if file_session.stack_id != id or file_session.user_id != user_id:
+    if meta["stack_id"] != id or meta["user_id"] != user_id:
         raise HTTPException(status_code=404, detail="Stack run not found")
 
     content = await file.read()
@@ -720,7 +717,8 @@ async def submit_run_file(
         content,
         content_type=file.content_type,
     )
-    resolved = file_session.resolve(
+    await publish_file_result(
+        run_id,
         request_id,
         {
             "file_id": row["id"],
@@ -729,11 +727,6 @@ async def submit_run_file(
             "size": row["size"],
         },
     )
-    if not resolved:
-        raise HTTPException(
-            status_code=404,
-            detail="File request not found or already fulfilled",
-        )
 
     return {
         "request_id": request_id,
