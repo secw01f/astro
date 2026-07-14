@@ -339,14 +339,32 @@ async def stream(ctx: click.Context, id: int, message: str, name: str, *, verbos
                 return
 
             if verbose:
-                click.secho(white("Verbose stream (each agent is labeled when their tokens begin).", "normal"))
-                click.secho("")
+                click.secho(white("Verbose stream: the supervisor streams live; supporting agents are shown as complete replies once they finish.", "normal"))
             else:
                 click.secho(cyan(f"{name}: ", "bold"))
 
             last_token_agent: str | None = None
             last_rendered_char: str | None = None
             run_id: str | None = None
+
+            # Supporting agents can run concurrently (parallel tool calls), so
+            # their tokens arrive interleaved. Buffer each agent's tokens and
+            # render them as one clean block, matching the supervisor's layout.
+            supporting_buffers: dict[str, str] = {}
+            supporting_order: list[str] = []
+
+            def flush_supporting(agent_name: str | None = None) -> None:
+                targets = [agent_name] if agent_name is not None else list(supporting_order)
+                for target in targets:
+                    if target not in supporting_buffers:
+                        continue
+                    text = supporting_buffers.pop(target, "").strip()
+                    if target in supporting_order:
+                        supporting_order.remove(target)
+                    click.secho("")
+                    click.secho(magenta(f"{target}:", "bold"))
+                    if text:
+                        click.secho(text)
 
             async for line in response.aiter_lines():
                 if not line.startswith("data: "):
@@ -363,16 +381,38 @@ async def stream(ctx: click.Context, id: int, message: str, name: str, *, verbos
 
                 if typ == "token":
                     ag = data.get("agent")
-                    if verbose and isinstance(ag, str) and ag != last_token_agent:
-                        click.secho("")
-                        click.secho(magenta(f"{ag}: ", "bold"), nl=False)
-                        last_token_agent = ag
                     content = data.get("content") or ""
+
+                    if verbose and isinstance(ag, str) and ag != name:
+                        supporting_buffers.setdefault(ag, "")
+                        if ag not in supporting_order:
+                            supporting_order.append(ag)
+                        supporting_buffers[ag] += content
+                        last_token_agent = ag
+                        continue
+
+                    if verbose and last_token_agent != name:
+                        # (Re)entering the supervisor's turn: emit any buffered
+                        # supporting replies first, then label the supervisor.
+                        flush_supporting()
+                        click.secho("")
+                        click.secho(cyan(f"{name}:", "bold"))
+                        last_rendered_char = None
+                        last_token_agent = name
+
                     if _needs_sentence_space(last_rendered_char, content):
                         content = " " + content
                     click.secho(content, nl=False)
                     if content:
                         last_rendered_char = content[-1]
+                elif typ == "tool_result":
+                    # A supporting agent finishing is reported as a tool result
+                    # whose tool_name is the agent's name; use it to emit that
+                    # agent's buffered reply as soon as it completes.
+                    if verbose:
+                        tool_name = data.get("tool_name")
+                        if isinstance(tool_name, str) and tool_name in supporting_buffers:
+                            flush_supporting(tool_name)
                 elif typ == "file_request":
                     request_id = data.get("request_id")
                     event_run_id = data.get("run_id") or run_id
@@ -389,10 +429,14 @@ async def stream(ctx: click.Context, id: int, message: str, name: str, *, verbos
                 elif typ == "end":
                     break
                 elif typ == "error":
+                    if verbose:
+                        flush_supporting()
                     click.secho("")
                     click.secho(red(data.get("content"), "bold"))
                     break
 
+            if verbose:
+                flush_supporting()
             click.secho("\n")
     except httpx.ConnectError:
         click.secho(red("Failed to connect to the API", "bold"))

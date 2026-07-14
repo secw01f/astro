@@ -88,8 +88,13 @@ async def fanout(
         to_client = typ not in storage_only_types
         if typ == "file_request":
             to_client = True
-        if typ in ("tool_call", "tool_result"):
+        if typ == "tool_call":
             to_client = False
+        elif typ == "tool_result":
+            # Surface tool results only in verbose mode; the client uses a
+            # supporting agent's own tool_result (tool_name == agent name) as a
+            # deterministic signal that its buffered reply is complete.
+            to_client = verbose
         if to_client and not verbose and supervisor_agent_name is not None:
             agent_name = item.get("agent") if isinstance(item, dict) else None
             if agent_name != supervisor_agent_name:
