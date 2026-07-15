@@ -58,7 +58,7 @@ def _needs_sentence_space(last_char: str | None, chunk: str) -> bool:
 
 
 class MessageTextArea(TextArea):
-    """Multiline prompt: Enter sends, Shift+Enter inserts a newline."""
+    """Multiline prompt: Enter sends, Shift+Enter / Ctrl+J insert a newline."""
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -73,7 +73,11 @@ class MessageTextArea(TextArea):
         self._update_height()
 
     def _on_key(self, event: events.Key) -> None:
-        if event.key == "shift+enter":
+        # Many terminals (macOS Terminal.app, VS Code, tmux, ...) send the same
+        # byte for Enter and Shift+Enter, so "shift+enter" never reaches us.
+        # Ctrl+J sends LF (0x0A), distinct from Enter's CR (0x0D), and works
+        # everywhere as a newline fallback.
+        if event.key in ("shift+enter", "ctrl+j"):
             self.insert("\n")
             event.prevent_default()
             return
@@ -223,7 +227,7 @@ class StackExecApp(App):
         return self.query_one("#chat_history", VerticalScroll)
 
     def _keymap_text(self) -> str:
-        return "enter send · shift+enter newline · F1 help · ctrl+c quit"
+        return "enter send · shift+enter/ctrl+j newline · F1 help · ctrl+c quit"
 
     def _update_status(self, message: str) -> None:
         self.query_one("#status_text", Static).update(message)
