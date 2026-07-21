@@ -102,7 +102,9 @@ class MemoryBase(SQLModel):
 class Memory(MemoryBase, table=True):
     id: int | None = Field(default=None, primary_key=True)
     user_id: Optional[int] | None = Field(default=None, foreign_key="user.id")
-    user: Optional["User"] = Relationship(back_populates="memories") 
+    user: Optional["User"] = Relationship(back_populates="memories")
+    stack_id: int = Field(foreign_key="stack.id", index=True)
+    stack: Optional["Stack"] = Relationship(back_populates="memories")
     created: datetime = Field(default_factory=datetime.utcnow)
 
     __table_args__ = (
@@ -209,6 +211,7 @@ class Stack(StackBase, table=True):
     user_id: Optional[int]| None = Field(default=None, foreign_key="user.id")
     user: Optional["User"] = Relationship(back_populates="stacks")
     agents: List["Agent"] = Relationship(back_populates="stacks", link_model=AgentStackLink)
+    memories: List["Memory"] = Relationship(back_populates="stack")
     messages: List["Message"] = Relationship(back_populates="stack")
     schedules: List["StackSchedule"] = Relationship(back_populates="stack")
     last_position: int = Field(default=-1)

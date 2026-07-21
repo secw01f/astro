@@ -49,13 +49,14 @@ def _trim_memory_rows(rows: list[dict]) -> list[dict]:
         total_chars += candidate_chars
     return trimmed
 
-async def _store_memory(user_id: int, content: str, category: str | None = None) -> dict:
+async def _store_memory(user_id: int, stack_id: int, content: str, category: str | None = None) -> dict:
     async with async_session() as session:
         memory = Memory(
             content=content,
             category=category,
             embedding=_embed(content),
             user_id=user_id,
+            stack_id=stack_id,
         )
         session.add(memory)
         await session.commit()
@@ -63,7 +64,7 @@ async def _store_memory(user_id: int, content: str, category: str | None = None)
         return {"id": memory.id}
 
 async def _recall_memory(
-    user_id: int, query: str, limit: int = 2, category: str | None = None
+    user_id: int, stack_id: int, query: str, limit: int = 2, category: str | None = None
 ) -> list[dict]:
     safe_limit = max(1, min(limit, settings.MEMORY_RECALL_MAX_ITEMS))
     async with async_session() as session:
@@ -71,7 +72,7 @@ async def _recall_memory(
         similarity = (literal(1.0) - distance).label("similarity")
         statement = (
             select(Memory, similarity)
-            .where(Memory.user_id == user_id)
+            .where(Memory.user_id == user_id, Memory.stack_id == stack_id)
             .order_by(distance)
             .limit(safe_limit)
         )
@@ -92,12 +93,12 @@ async def _recall_memory(
         ]
         return _trim_memory_rows(rows)
 
-async def _list_memories(user_id: int, limit: int = 10, category: str | None = None) -> list[dict]:
+async def _list_memories(user_id: int, stack_id: int, limit: int = 10, category: str | None = None) -> list[dict]:
     safe_limit = max(1, min(limit, settings.MEMORY_LIST_MAX_ITEMS))
     async with async_session() as session:
         statement = (
             select(Memory)
-            .where(Memory.user_id == user_id)
+            .where(Memory.user_id == user_id, Memory.stack_id == stack_id)
             .order_by(Memory.created.desc())
             .limit(safe_limit)
         )
@@ -116,16 +117,16 @@ async def _list_memories(user_id: int, limit: int = 10, category: str | None = N
         ]
         return _trim_memory_rows(rows)
 
-async def _delete_memory(user_id: int, memory_id: int) -> dict:
+async def _delete_memory(user_id: int, stack_id: int, memory_id: int) -> dict:
     async with async_session() as session:
         memory = await session.get(Memory, memory_id)
-        if memory is None or memory.user_id != user_id:
+        if memory is None or memory.user_id != user_id or memory.stack_id != stack_id:
             return {"deleted": False}
         await session.delete(memory)
         await session.commit()
         return {"deleted": True}
 
-def MemoryToolset(user_id: int, *, app_loop: asyncio.AbstractEventLoop | None = None) -> Toolset:
+def MemoryToolset(user_id: int, stack_id: int, *, app_loop: asyncio.AbstractEventLoop | None = None) -> Toolset:
     @tool(name="memory_store")
     def memory_store(content: str, category: str | None = None) -> dict:
         """
@@ -138,7 +139,7 @@ def MemoryToolset(user_id: int, *, app_loop: asyncio.AbstractEventLoop | None = 
         Returns:
             The memory id
         """
-        return run_sync(_store_memory(user_id, content, category), app_loop=app_loop)
+        return run_sync(_store_memory(user_id, stack_id, content, category), app_loop=app_loop)
 
     @tool(name="memory_recall")
     def memory_recall(query: str, limit: int = 10, category: str | None = None) -> list[dict]:
@@ -153,7 +154,7 @@ def MemoryToolset(user_id: int, *, app_loop: asyncio.AbstractEventLoop | None = 
         Returns:
             A list of memories.
         """
-        return run_sync(_recall_memory(user_id, query, limit, category), app_loop=app_loop)
+        return run_sync(_recall_memory(user_id, stack_id, query, limit, category), app_loop=app_loop)
 
     @tool(name="memory_list")
     def memory_list_memories(limit: int = 15, category: str | None = None) -> list[dict]:
@@ -167,7 +168,7 @@ def MemoryToolset(user_id: int, *, app_loop: asyncio.AbstractEventLoop | None = 
         Returns:
             A list of memories.
         """
-        return run_sync(_list_memories(user_id, limit, category), app_loop=app_loop)
+        return run_sync(_list_memories(user_id, stack_id, limit, category), app_loop=app_loop)
 
     @tool(name="memory_delete")
     def memory_delete(memory_id: int) -> dict:
@@ -180,6 +181,6 @@ def MemoryToolset(user_id: int, *, app_loop: asyncio.AbstractEventLoop | None = 
         Returns:
             A dictionary with the deleted status.
         """
-        return run_sync(_delete_memory(user_id, memory_id), app_loop=app_loop)
+        return run_sync(_delete_memory(user_id, stack_id, memory_id), app_loop=app_loop)
 
     return Toolset([memory_store, memory_recall, memory_list_memories, memory_delete])

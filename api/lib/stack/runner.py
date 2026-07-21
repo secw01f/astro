@@ -172,7 +172,7 @@ async def prepare_stack_run(
         streaming_callback=callback,
     )
 
-    supervisor.add_tool(MemoryToolset(user_id, app_loop=loop))
+    supervisor.add_tool(MemoryToolset(user_id, stack_id, app_loop=loop))
     supervisor.add_tool(DateToolset())
     supervisor.add_tool(MathToolset())
     supervisor.add_tool(SpecToolset())
@@ -217,7 +217,7 @@ async def prepare_stack_run(
         )
 
         agent_tools = [
-            MemoryToolset(user_id, app_loop=loop),
+            MemoryToolset(user_id, stack_id, app_loop=loop),
             DateToolset(),
             MathToolset(),
             SpecToolset(),
