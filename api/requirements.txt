@@ -3,7 +3,7 @@ sqlmodel
 typer
 uvicorn
 pydantic-settings
-haystack-ai
+haystack-ai>=2.31.0,<3
 amazon-bedrock-haystack
 anthropic-haystack
 mcp-haystack
