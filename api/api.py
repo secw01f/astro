@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import json
 import sys
@@ -24,6 +25,7 @@ from src.router.stack import stack_router
 from src.router.tool import tool_router
 from src.router.llm import llm_router
 from src.router.message import message_router
+from src.tool.memory import _get_model
 
 log_config()
 
@@ -33,6 +35,8 @@ logger = logging.getLogger(__name__)
 @api.on_event("startup")
 async def startup_event():
     logger.info("API startup initiated")
+
+    asyncio.get_event_loop().run_in_executor(None, _get_model)
 
     if settings.SECRET_KEY == "supersecretkey" or settings.SECRET_KEY == "" or settings.SECRET_KEY is None or len(settings.SECRET_KEY) < 64:
         logger.error("SECRET_KEY is not set or insecure")
