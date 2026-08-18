@@ -14,32 +14,13 @@ from lib.tools import (
     build_agent_tooling_preview,
 )
 from lib.wizard import select_one, select_many_ids
-
-SUPERVISOR_ROLES = [
-    "application_security_supervisor",
-    "governance_risk_compliance_supervisor",
-    "detection_incident_response_supervisor",
-    "offensive_security_supervisor",
-    "vulnerability_management_supervisor",
-    "custom_supervisor",
-]
-
-SUPPORTING_ROLES = [
-    "application_security_architect",
-    "detection_incident_response_architect",
-    "security_engineering_architect",
-    "application_security_engineer",
-    "governance_risk_compliance_engineer",
-    "detection_incident_response_engineer",
-    "offensive_security_engineer",
-    "vulnerability_management_engineer",
-    "application_security_analyst",
-    "governance_risk_compliance_analyst",
-    "detection_incident_response_analyst",
-    "offensive_security_analyst",
-    "vulnerability_management_analyst",
-    "custom_supporting_agent",
-]
+from src.tui.agent_wizard import (
+    CUSTOM_ROLES,
+    SUPERVISOR_ROLES,
+    SUPPORTING_ROLES,
+    run_agent_wizard,
+)
+from src.tui.prompt_editor import edit_multiline_prompt
 
 
 def _truncate_prompt(text: str, limit: int = 72) -> str:
@@ -62,6 +43,22 @@ def _prompt_keep_or_change(label: str, current_display: str, *, interactive: boo
     )
     return choice == "keep"
 
+
+def _edit_system_prompt(
+    *,
+    initial: str = "",
+    title: str = "Edit system prompt",
+    interactive: bool,
+) -> str | None:
+    """Edit a multiline system prompt. Returns None if cancelled / unavailable."""
+    if _is_tty_interactive(interactive):
+        return edit_multiline_prompt(
+            title=title,
+            subtitle="Ctrl+S save · Esc cancel. Enter inserts a newline.",
+            initial=initial,
+        )
+    return click.prompt("System prompt", type=str, default=initial, show_default=bool(initial))
+
 def _return_agent(agent: dict[str, Any]) -> None:
     llm = agent.get("llm")
     llm_line = (
@@ -82,6 +79,42 @@ def _return_agent(agent: dict[str, Any]) -> None:
         f"{cyan('Effective tools:', 'bold')} {format_effective_tools(agent)}\n"
         f"{cyan('Created:', 'bold')} {agent['created']}"
     )
+
+
+def _load_llms(client) -> list[dict[str, Any]] | None:
+    response = client.get("/llm/llms")
+    if response.status_code != 200:
+        click.echo(red("Failed to list LLMs", "bold"))
+        click.echo(white(f"Error: {response.text}", "normal"))
+        return None
+    llms = response.json().get("llms", [])
+    if not llms:
+        click.echo(red("No LLMs found. Create one first with `astro llms create`.", "bold"))
+        return None
+    return llms
+
+
+def _load_toolsets(client) -> list[dict[str, Any]]:
+    response = client.get("/tool/toolsets")
+    if response.status_code != 200:
+        return []
+    return response.json().get("toolsets", [])
+
+
+def _load_prebuilt_prompts(client) -> dict[str, str]:
+    response = client.get("/agent/prompts")
+    if response.status_code != 200:
+        click.echo(yellow("Could not load prebuilt prompts; prompt step may start empty.", "bold"))
+        return {}
+    prompts = response.json().get("prompts") or []
+    catalog: dict[str, str] = {}
+    for item in prompts:
+        role = item.get("role")
+        text = item.get("prompt")
+        if role and isinstance(text, str):
+            catalog[str(role)] = text
+    return catalog
+
 
 @click.group(help="Manage ASTRO agents")
 def agents():
@@ -120,21 +153,75 @@ def get_agent_by_id(ctx: click.Context, id: int):
     _return_agent(response.json()["agent"])
 
 
-@agents.command()
-@click.pass_context
-@click.option("--name", type=click.STRING, required=False, help="Name of the agent")
-@click.option("--description", type=click.STRING, required=False, help="Description of the agent")
-@click.option("--type", "agent_type", type=click.Choice(["supporting", "supervisor"]), required=False, help="Type of agent")
-@click.option("--role", type=click.STRING, required=False, help="Role of the agent")
-@click.option("--system-prompt", type=click.STRING, required=False, help="System prompt for the agent")
-@click.option("--llm-id", type=click.INT, required=False, help="LLM ID to use")
-@click.option("--toolset-id", "toolset_ids", type=click.INT, multiple=True, help="Toolset ID to attach (repeatable)")
-@click.option("--tool-id", "tool_ids", type=click.INT, multiple=True, help="Tool ID to attach (repeatable)")
-@click.option("--interactive/--no-interactive", default=True, help="Use interactive selection prompts")
-@click.option("--yes", is_flag=True, help="Skip confirmation prompt")
-def create(ctx: click.Context, name: str | None, description: str | None, agent_type: str | None, role: str | None, system_prompt: str | None, llm_id: int | None, toolset_ids: tuple[int, ...], tool_ids: tuple[int, ...], interactive: bool, yes: bool):
-    client = ctx.obj["client"]
+def _create_agent_tui(
+    client,
+    *,
+    name: str | None,
+    description: str | None,
+    agent_type: str | None,
+    role: str | None,
+    system_prompt: str | None,
+    llm_id: int | None,
+    toolset_ids: tuple[int, ...],
+    tool_ids: tuple[int, ...],
+) -> None:
+    llms = _load_llms(client)
+    if llms is None:
+        return
+    toolsets = _load_toolsets(client)
+    prebuilt_prompts = _load_prebuilt_prompts(client)
 
+    initial: dict[str, Any] = {
+        "name": name or "",
+        "description": description or "",
+        "agent_type": agent_type or "supporting",
+        "role": role or "",
+        "llm_id": llm_id,
+        "system_prompt": system_prompt or "",
+        "toolset_ids": list(toolset_ids),
+        "tool_ids": list(tool_ids),
+    }
+    if initial["role"]:
+        allowed = SUPERVISOR_ROLES if initial["agent_type"] == "supervisor" else SUPPORTING_ROLES
+        if initial["role"] not in allowed:
+            click.echo(red(f"Role '{initial['role']}' does not match type '{initial['agent_type']}'.", "bold"))
+            return
+
+    payload = run_agent_wizard(
+        mode="create",
+        llms=llms,
+        toolsets=toolsets,
+        initial=initial,
+        prebuilt_prompts=prebuilt_prompts,
+    )
+    if payload is None:
+        click.echo(white("Cancelled.", "normal"))
+        return
+
+    create_response = client.post("/agent/create", json=payload)
+    if create_response.status_code != 200:
+        click.echo(red("Failed to create agent", "bold"))
+        click.echo(white(f"Error: {create_response.text}", "normal"))
+        return
+
+    click.echo(green("Agent created successfully", "bold"))
+    _return_agent(create_response.json()["agent"])
+
+
+def _create_agent_cli(
+    client,
+    *,
+    name: str | None,
+    description: str | None,
+    agent_type: str | None,
+    role: str | None,
+    system_prompt: str | None,
+    llm_id: int | None,
+    toolset_ids: tuple[int, ...],
+    tool_ids: tuple[int, ...],
+    interactive: bool,
+    yes: bool,
+) -> None:
     click.echo(green("Agent creation wizard", "bold"))
     click.echo("")
     click.echo(white("Step 1/5 - Agent details", "normal"))
@@ -164,15 +251,8 @@ def create(ctx: click.Context, name: str | None, description: str | None, agent_
     click.echo("")
     click.echo(white("Step 3/5 - LLM selection", "normal"))
     click.echo("")
-    llm_response = client.get("/llm/llms")
-    if llm_response.status_code != 200:
-        click.echo(red("Failed to list LLMs", "bold"))
-        click.echo(white(f"Error: {llm_response.text}", "normal"))
-        return
-
-    llms = llm_response.json().get("llms", [])
-    if not llms:
-        click.echo(red("No LLMs found. Create one first with `astro llms create`.", "bold"))
+    llms = _load_llms(client)
+    if llms is None:
         return
 
     llm_choices = [
@@ -198,8 +278,16 @@ def create(ctx: click.Context, name: str | None, description: str | None, agent_
         click.echo(white("Step 4/5 - Prompt and toolsets", "normal"))
     click.echo("")
 
-    if not system_prompt and role in ("custom_supervisor", "custom_supporting_agent"):
-        system_prompt = click.prompt("System prompt", type=str)
+    if not system_prompt and role in CUSTOM_ROLES:
+        edited = _edit_system_prompt(
+            initial="",
+            title="Create system prompt",
+            interactive=interactive,
+        )
+        if edited is None or not str(edited).strip():
+            click.echo(red("System prompt is required for custom roles.", "bold"))
+            return
+        system_prompt = edited
     else:
         system_prompt = None
     click.echo("")
@@ -225,9 +313,8 @@ def create(ctx: click.Context, name: str | None, description: str | None, agent_
     else:
         selected_toolset_ids = list(toolset_ids)
         selected_tool_ids = list(tool_ids)
-        toolset_response = client.get("/tool/toolsets")
-        if toolset_response.status_code == 200:
-            catalog_toolsets = toolset_response.json().get("toolsets", [])
+        catalog_toolsets = _load_toolsets(client)
+        if catalog_toolsets:
             if not selected_toolset_ids:
                 toolset_choices = [
                     (toolset["id"], f"{toolset['name']} ({toolset['type']}, {len(toolset.get('tools', []))} tools)")
@@ -319,25 +406,135 @@ def create(ctx: click.Context, name: str | None, description: str | None, agent_
     click.echo(green("Agent created successfully", "bold"))
     _return_agent(create_response.json()["agent"])
 
-@agents.command(name="update")
+
+@agents.command()
 @click.pass_context
-@click.argument("id", type=click.INT)
 @click.option("--name", type=click.STRING, required=False, help="Name of the agent")
 @click.option("--description", type=click.STRING, required=False, help="Description of the agent")
+@click.option("--type", "agent_type", type=click.Choice(["supporting", "supervisor"]), required=False, help="Type of agent")
 @click.option("--role", type=click.STRING, required=False, help="Role of the agent")
 @click.option("--system-prompt", type=click.STRING, required=False, help="System prompt for the agent")
 @click.option("--llm-id", type=click.INT, required=False, help="LLM ID to use")
 @click.option("--toolset-id", "toolset_ids", type=click.INT, multiple=True, help="Toolset ID to attach (repeatable)")
 @click.option("--tool-id", "tool_ids", type=click.INT, multiple=True, help="Tool ID to attach (repeatable)")
-@click.option("--interactive/--no-interactive", default=True, help="Use interactive selection prompts")
-@click.option("--yes", is_flag=True, help="Skip confirmation prompt")
-def update_agent(ctx: click.Context, id: int, name: str | None, description: str | None, role: str | None, system_prompt: str | None, llm_id: int | None, toolset_ids: tuple[int, ...], tool_ids: tuple[int, ...], interactive: bool, yes: bool):
+@click.option("--interactive/--no-interactive", default=True, help="Use interactive TUI wizard when a TTY is available")
+@click.option("--yes", is_flag=True, help="Skip confirmation prompt (non-interactive only)")
+def create(ctx: click.Context, name: str | None, description: str | None, agent_type: str | None, role: str | None, system_prompt: str | None, llm_id: int | None, toolset_ids: tuple[int, ...], tool_ids: tuple[int, ...], interactive: bool, yes: bool):
     client = ctx.obj["client"]
+    if _is_tty_interactive(interactive):
+        _create_agent_tui(
+            client,
+            name=name,
+            description=description,
+            agent_type=agent_type,
+            role=role,
+            system_prompt=system_prompt,
+            llm_id=llm_id,
+            toolset_ids=toolset_ids,
+            tool_ids=tool_ids,
+        )
+        return
 
+    _create_agent_cli(
+        client,
+        name=name,
+        description=description,
+        agent_type=agent_type,
+        role=role,
+        system_prompt=system_prompt,
+        llm_id=llm_id,
+        toolset_ids=toolset_ids,
+        tool_ids=tool_ids,
+        interactive=interactive,
+        yes=yes,
+    )
+
+
+def _update_agent_tui(client, agent_id: int, *, seeds: dict[str, Any]) -> None:
+    current_agent_details = client.get(f"/agent/{agent_id}")
+    if current_agent_details.status_code != 200:
+        click.echo(red("Failed to get agent details", "bold"))
+        click.echo(white(f"Error: {current_agent_details.text}", "normal"))
+        return
+    current_agent = current_agent_details.json()["agent"]
+
+    llms = _load_llms(client)
+    if llms is None:
+        return
+    toolsets = _load_toolsets(client)
+    prebuilt_prompts = _load_prebuilt_prompts(client)
+
+    current_llm = current_agent.get("llm")
+    current_llm_id = current_llm["id"] if isinstance(current_llm, dict) else None
+    current_toolset_ids = [toolset["id"] for toolset in current_agent.get("toolsets") or []]
+    current_tool_ids = [tool["id"] for tool in current_agent.get("tools") or []]
+    if toolsets:
+        current_tool_ids, _ = prune_redundant_tool_ids(
+            toolsets, current_toolset_ids, current_tool_ids
+        )
+
+    baseline = {
+        "name": current_agent["name"],
+        "description": current_agent["description"],
+        "agent_type": current_agent["agent_type"],
+        "role": current_agent["role"],
+        "llm_id": current_llm_id,
+        "system_prompt": current_agent.get("system_prompt", ""),
+        "toolset_ids": current_toolset_ids,
+        "tool_ids": current_tool_ids,
+    }
+    initial = {**baseline, **seeds}
+
+    allowed = SUPERVISOR_ROLES if initial["agent_type"] == "supervisor" else SUPPORTING_ROLES
+    if initial["role"] not in allowed:
+        click.echo(red(f"Role '{initial['role']}' does not match type '{initial['agent_type']}'.", "bold"))
+        return
+
+    updates = run_agent_wizard(
+        mode="update",
+        llms=llms,
+        toolsets=toolsets,
+        initial=initial,
+        baseline=baseline,
+        prebuilt_prompts=prebuilt_prompts,
+    )
+    if updates is None:
+        click.echo(white("Cancelled.", "normal"))
+        return
+    if not updates:
+        click.echo(white("No changes selected.", "normal"))
+        return
+
+    update_response = client.patch(f"/agent/{agent_id}", json=updates)
+    if update_response.status_code != 200:
+        click.echo(red("Failed to update agent", "bold"))
+        click.echo(white(f"Error: {update_response.text}", "normal"))
+        return
+
+    click.echo("")
+    click.echo(green("Agent updated successfully", "bold"))
+    click.echo("")
+    _return_agent(update_response.json()["agent"])
+
+
+def _update_agent_cli(
+    client,
+    agent_id: int,
+    *,
+    name: str | None,
+    description: str | None,
+    role: str | None,
+    system_prompt: str | None,
+    llm_id: int | None,
+    toolset_ids: tuple[int, ...],
+    tool_ids: tuple[int, ...],
+    interactive: bool,
+    yes: bool,
+) -> None:
     click.echo(green("Agent update wizard", "bold"))
     click.echo("")
 
-    current_agent_details = client.get(f"/agent/{id}")
+    current_agent_details = client.get(f"/agent/{agent_id}")
     if current_agent_details.status_code != 200:
         click.echo(red("Failed to get agent details", "bold"))
         click.echo(white(f"Error: {current_agent_details.text}", "normal"))
@@ -400,9 +597,15 @@ def update_agent(ctx: click.Context, id: int, name: str | None, description: str
     if system_prompt is not None:
         updates["system_prompt"] = system_prompt
     elif not _prompt_keep_or_change("System prompt", prompt_display, interactive=interactive):
-        updates["system_prompt"] = click.prompt(
-            "System prompt", type=str, default=current_prompt, show_default=bool(current_prompt)
+        edited = _edit_system_prompt(
+            initial=current_prompt,
+            title=f"Edit system prompt — {current_name}",
+            interactive=interactive,
         )
+        if edited is None:
+            click.echo(white("Kept current system prompt.", "normal"))
+        else:
+            updates["system_prompt"] = edited
 
     click.echo("")
     click.echo(white("Step 3/5 - LLM selection", "normal"))
@@ -410,17 +613,9 @@ def update_agent(ctx: click.Context, id: int, name: str | None, description: str
     if llm_id is not None:
         updates["llm"] = llm_id
     elif not _prompt_keep_or_change("LLM", current_llm_display, interactive=interactive):
-        llm_response = client.get("/llm/llms")
-        if llm_response.status_code != 200:
-            click.echo(red("Failed to list LLMs", "bold"))
-            click.echo(white(f"Error: {llm_response.text}", "normal"))
+        llms = _load_llms(client)
+        if llms is None:
             return
-
-        llms = llm_response.json().get("llms", [])
-        if not llms:
-            click.echo(red("No LLMs found. Create one first with `astro llms create`.", "bold"))
-            return
-
         llm_choices = [
             (llm["id"], f"{llm['name']} ({llm['provider']})")
             for llm in llms
@@ -435,17 +630,14 @@ def update_agent(ctx: click.Context, id: int, name: str | None, description: str
     click.echo("")
     click.echo(white("Step 4/5 - Toolset and tool selection", "normal"))
     click.echo("")
-    catalog_toolsets: list[dict[str, Any]] = []
-    toolset_response = client.get("/tool/toolsets")
-    if toolset_response.status_code == 200:
-        catalog_toolsets = toolset_response.json().get("toolsets", [])
+    catalog_toolsets = _load_toolsets(client)
+    toolset_response_ok = bool(catalog_toolsets)
 
     if toolset_ids:
         updates["toolset_ids"] = list(toolset_ids)
     elif not _prompt_keep_or_change("Toolsets", current_toolset_display, interactive=interactive):
-        if not catalog_toolsets:
+        if not toolset_response_ok:
             click.echo(red("Failed to list toolsets", "bold"))
-            click.echo(white(f"Error: {toolset_response.text}", "normal"))
             return
         toolset_choices = [
             (toolset["id"], f"{toolset['name']} ({toolset['type']}, {len(toolset.get('tools', []))} tools)")
@@ -462,9 +654,8 @@ def update_agent(ctx: click.Context, id: int, name: str | None, description: str
     if tool_ids:
         updates["tool_ids"] = list(tool_ids)
     elif not _prompt_keep_or_change("Additional tools", current_tool_display, interactive=interactive):
-        if not catalog_toolsets:
+        if not toolset_response_ok:
             click.echo(red("Failed to list tools", "bold"))
-            click.echo(white(f"Error: {toolset_response.text}", "normal"))
             return
         covered = tool_ids_from_toolsets(catalog_toolsets, resolved_toolset_ids)
         tool_choices = tool_choices_from_toolsets(
@@ -503,9 +694,9 @@ def update_agent(ctx: click.Context, id: int, name: str | None, description: str
         updates["tool_ids"] = pruned
 
     if llm_id is not None and "llm" in updates:
-        llm_response = client.get("/llm/llms")
-        if llm_response.status_code == 200:
-            llm_ids = {llm["id"] for llm in llm_response.json().get("llms", [])}
+        llms = _load_llms(client)
+        if llms is not None:
+            llm_ids = {llm["id"] for llm in llms}
             if updates["llm"] not in llm_ids:
                 click.echo(red(f"LLM ID {updates['llm']} not found.", "bold"))
                 return
@@ -545,7 +736,7 @@ def update_agent(ctx: click.Context, id: int, name: str | None, description: str
         click.echo(white("Cancelled.", "normal"))
         return
 
-    update_response = client.patch(f"/agent/{id}", json=updates)
+    update_response = client.patch(f"/agent/{agent_id}", json=updates)
     if update_response.status_code != 200:
         click.echo(red("Failed to update agent", "bold"))
         click.echo(white(f"Error: {update_response.text}", "normal"))
@@ -555,6 +746,55 @@ def update_agent(ctx: click.Context, id: int, name: str | None, description: str
     click.echo(green("Agent updated successfully", "bold"))
     click.echo("")
     _return_agent(update_response.json()["agent"])
+
+
+@agents.command(name="update")
+@click.pass_context
+@click.argument("id", type=click.INT)
+@click.option("--name", type=click.STRING, required=False, help="Name of the agent")
+@click.option("--description", type=click.STRING, required=False, help="Description of the agent")
+@click.option("--role", type=click.STRING, required=False, help="Role of the agent")
+@click.option("--system-prompt", type=click.STRING, required=False, help="System prompt for the agent")
+@click.option("--llm-id", type=click.INT, required=False, help="LLM ID to use")
+@click.option("--toolset-id", "toolset_ids", type=click.INT, multiple=True, help="Toolset ID to attach (repeatable)")
+@click.option("--tool-id", "tool_ids", type=click.INT, multiple=True, help="Tool ID to attach (repeatable)")
+@click.option("--interactive/--no-interactive", default=True, help="Use interactive TUI wizard when a TTY is available")
+@click.option("--yes", is_flag=True, help="Skip confirmation prompt (non-interactive only)")
+def update_agent(ctx: click.Context, id: int, name: str | None, description: str | None, role: str | None, system_prompt: str | None, llm_id: int | None, toolset_ids: tuple[int, ...], tool_ids: tuple[int, ...], interactive: bool, yes: bool):
+    client = ctx.obj["client"]
+    if _is_tty_interactive(interactive):
+        seeds: dict[str, Any] = {}
+        if name is not None:
+            seeds["name"] = name
+        if description is not None:
+            seeds["description"] = description
+        if role is not None:
+            seeds["role"] = role
+        if system_prompt is not None:
+            seeds["system_prompt"] = system_prompt
+        if llm_id is not None:
+            seeds["llm_id"] = llm_id
+        if toolset_ids:
+            seeds["toolset_ids"] = list(toolset_ids)
+        if tool_ids:
+            seeds["tool_ids"] = list(tool_ids)
+        _update_agent_tui(client, id, seeds=seeds)
+        return
+
+    _update_agent_cli(
+        client,
+        id,
+        name=name,
+        description=description,
+        role=role,
+        system_prompt=system_prompt,
+        llm_id=llm_id,
+        toolset_ids=toolset_ids,
+        tool_ids=tool_ids,
+        interactive=interactive,
+        yes=yes,
+    )
+
 
 @agents.command(name="delete")
 @click.pass_context
@@ -579,4 +819,4 @@ def delete_agent(ctx: click.Context, id: int, yes: bool):
         click.echo(white(f"Error: {delete_response.text}", "normal"))
         return
 
-    click.echo(green("Agent deleted successfully", "bold")) 
+    click.echo(green("Agent deleted successfully", "bold"))
