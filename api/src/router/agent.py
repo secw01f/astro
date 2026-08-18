@@ -46,7 +46,29 @@ async def get_all_agents(request: Request, session: session_dep) -> dict[str, li
     agents = result.all()
     return {"agents": [AgentPublic.model_validate(agent) for agent in agents]}
 
-@agent_router.get("/{id}")
+@agent_router.get("/prompts")
+async def get_prebuilt_prompts(session: session_dep) -> dict[str, list[Prompt]]:
+    stmt = select(Prompt)
+    result = await session.exec(stmt)
+    prompts = result.all()
+    return {"prompts": [Prompt.model_validate(prompt) for prompt in prompts]}
+
+@agent_router.patch("/prompt/{id}")
+async def update_prebuilt_prompt(
+    id: int, body: UpdatePrompt, session: session_dep
+) -> dict[str, Prompt]:
+    stmt = select(Prompt).where(Prompt.id == id)
+    result = await session.exec(stmt)
+    db_prompt = result.first()
+    if not db_prompt:
+        raise HTTPException(status_code=404, detail="Prompt not found")
+    db_prompt.prompt = body.prompt
+    session.add(db_prompt)
+    await session.flush()
+    await session.commit()
+    return {"prompt": Prompt.model_validate(db_prompt)}
+
+@agent_router.get("/{id:int}")
 async def get_agent_by_id(request: Request, id: int, session: session_dep) -> dict[str, AgentPublic]:
     claims = getattr(request.state, "claims", None)
 
@@ -68,7 +90,7 @@ async def get_agent_by_id(request: Request, id: int, session: session_dep) -> di
 
     return {"agent": AgentPublic.model_validate(agent)}
 
-@agent_router.patch("/{id}")
+@agent_router.patch("/{id:int}")
 async def update_agent(request: Request, id: int, body: UpdateAgent, session: session_dep) -> dict[str, AgentPublic]:
     claims = getattr(request.state, "claims", None)
 
@@ -180,7 +202,7 @@ async def create_agent(request: Request, agent: CreateAgent, session: session_de
     loaded = (await session.exec(loaded_stmt)).one()
     return {"agent": AgentPublic.model_validate(loaded)}
 
-@agent_router.delete("/{id}")
+@agent_router.delete("/{id:int}")
 async def delete_agent(request: Request, id: int, session: session_dep) -> dict[str, str]:
     claims = getattr(request.state, "claims", None)
 
@@ -200,23 +222,3 @@ async def delete_agent(request: Request, id: int, session: session_dep) -> dict[
     await session.commit()
 
     return {"message": "Agent deleted successfully"}
-
-@agent_router.get("/prompts")
-async def get_prebuilt_prompts(session: session_dep) -> dict[str, list[str]]:
-    stmt = select(Prompt)
-    result = await session.exec(stmt)
-    prompts = result.all()
-    return {"prompts": [Prompt.model_validate(prompt) for prompt in prompts]}
-
-@agent_router.patch("/prompt/{id}")
-async def update_prebuilt_prompt(prompt: UpdatePrompt, session: session_dep) -> dict[str, Prompt]:
-    stmt = select(Prompt).where(Prompt.id == id)
-    result = await session.exec(stmt)
-    prompt = result.first()
-    if not prompt:
-        raise HTTPException(status_code=404, detail="Prompt not found")
-    prompt.prompt = prompt.prompt
-    session.add(prompt)
-    await session.flush()
-    await session.commit()
-    return {"prompt": Prompt.model_validate(prompt)}

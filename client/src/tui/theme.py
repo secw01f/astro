@@ -274,3 +274,249 @@ FileRequestScreen {{
     background: {BORDER};
 }}
 """
+
+PROMPT_EDITOR_CSS = f"""
+Screen {{
+    background: {BG};
+    color: {TEXT};
+}}
+
+#editor_container {{
+    height: 100%;
+    padding: 1 2;
+    background: {BG};
+}}
+
+#editor_title {{
+    color: {PRIMARY};
+    text-style: bold;
+    margin-bottom: 0;
+}}
+
+#editor_subtitle {{
+    color: {TEXT_MUTED};
+    margin-bottom: 1;
+}}
+
+#editor_body {{
+    height: 1fr;
+    background: {PANEL_BG};
+    border: round {BORDER};
+    padding: 0 1;
+    color: {TEXT};
+}}
+
+#editor_body:focus {{
+    border: round {PRIMARY};
+}}
+
+#editor_body .text-area--cursor-line {{
+    background: transparent;
+}}
+
+#editor_body > .text-area--cursor {{
+    color: {PRIMARY};
+    background: {PRIMARY};
+}}
+
+#editor_status {{
+    height: 1;
+    margin-top: 1;
+    color: {TEXT_MUTED};
+}}
+
+#editor_buttons {{
+    height: auto;
+    align: right middle;
+    margin-top: 1;
+}}
+
+#editor_buttons Button {{
+    height: 1;
+    min-height: 1;
+    border: none;
+    background: transparent;
+    margin-left: 2;
+}}
+
+#save_prompt {{
+    color: {PRIMARY};
+}}
+
+#save_prompt:hover, #save_prompt:focus {{
+    color: {TEXT};
+    background: {PRIMARY};
+}}
+
+#cancel_prompt {{
+    color: {TEXT_MUTED};
+}}
+
+#cancel_prompt:hover, #cancel_prompt:focus {{
+    color: {TEXT};
+    background: {BORDER};
+}}
+"""
+
+AGENT_WIZARD_CSS = f"""
+Screen {{
+    background: {BG};
+    color: {TEXT};
+}}
+
+#wizard_container {{
+    height: 100%;
+    padding: 1 2;
+    background: {BG};
+}}
+
+#wizard_title {{
+    color: {PRIMARY};
+    text-style: bold;
+}}
+
+#wizard_step {{
+    color: {TEXT_MUTED};
+    margin-bottom: 1;
+}}
+
+#wizard_error {{
+    color: {DANGER};
+    text-style: bold;
+    height: auto;
+    margin-bottom: 1;
+}}
+
+#step_body {{
+    height: 1fr;
+    background: transparent;
+}}
+
+.field_label {{
+    color: {TEXT_DIM};
+    text-style: bold;
+    margin-top: 1;
+    margin-bottom: 0;
+}}
+
+.field_hint {{
+    color: {TEXT_MUTED};
+    margin-bottom: 0;
+}}
+
+Input {{
+    background: {PANEL_BG};
+    border: round {BORDER};
+    color: {TEXT};
+    margin-bottom: 0;
+}}
+
+Input:focus {{
+    border: round {PRIMARY};
+}}
+
+Select {{
+    background: {PANEL_BG};
+    border: round {BORDER};
+    color: {TEXT};
+}}
+
+Select:focus {{
+    border: round {PRIMARY};
+}}
+
+SelectionList {{
+    height: 1fr;
+    background: {PANEL_BG};
+    border: round {BORDER};
+    color: {TEXT};
+    padding: 0 1;
+}}
+
+SelectionList:focus {{
+    border: round {PRIMARY};
+}}
+
+#prompt_area {{
+    height: 1fr;
+    background: {PANEL_BG};
+    border: round {BORDER};
+    padding: 0 1;
+    color: {TEXT};
+}}
+
+#prompt_area:focus {{
+    border: round {PRIMARY};
+}}
+
+#prompt_area .text-area--cursor-line {{
+    background: transparent;
+}}
+
+#prompt_area > .text-area--cursor {{
+    color: {PRIMARY};
+    background: {PRIMARY};
+}}
+
+#review_panel {{
+    height: 1fr;
+    background: {PANEL_BG};
+    border: round {BORDER};
+    padding: 1;
+    color: {TEXT};
+}}
+
+#wizard_footer {{
+    height: auto;
+    margin-top: 1;
+    layout: horizontal;
+}}
+
+#wizard_keymap {{
+    width: 1fr;
+    color: {TEXT_MUTED};
+    content-align: left middle;
+}}
+
+#wizard_buttons {{
+    width: auto;
+    height: auto;
+    align: right middle;
+}}
+
+#wizard_buttons Button {{
+    height: 1;
+    min-height: 1;
+    border: none;
+    background: transparent;
+    margin-left: 2;
+}}
+
+#btn_back {{
+    color: {TEXT_MUTED};
+}}
+
+#btn_back:hover, #btn_back:focus {{
+    color: {TEXT};
+    background: {BORDER};
+}}
+
+#btn_next, #btn_confirm {{
+    color: {PRIMARY};
+}}
+
+#btn_next:hover, #btn_next:focus,
+#btn_confirm:hover, #btn_confirm:focus {{
+    color: {TEXT};
+    background: {PRIMARY};
+}}
+
+#btn_cancel {{
+    color: {TEXT_MUTED};
+}}
+
+#btn_cancel:hover, #btn_cancel:focus {{
+    color: {TEXT};
+    background: {BORDER};
+}}
+"""
